@@ -8,3 +8,47 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
 }
+
+body.custom-cursor-active,
+body.custom-cursor-active * {
+  cursor: none !important;
+}
+
+.custom-cursor-dot,
+.custom-cursor-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 150;
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.custom-cursor-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #cffafe;
+  box-shadow: 0 0 12px rgba(0, 242, 254, 0.95);
+}
+
+.custom-cursor-ring {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(207, 250, 254, 0.58);
+  border-radius: 9999px;
+  box-shadow: 0 0 16px rgba(0, 242, 254, 0.16);
+  transition:
+    width 180ms ease,
+    height 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.custom-cursor-ring-active {
+  width: 42px;
+  height: 42px;
+  border-color: rgba(255, 155, 112, 0.86);
+  box-shadow: 0 0 22px rgba(255, 123, 0, 0.28);
+}
