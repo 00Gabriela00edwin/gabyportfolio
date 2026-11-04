@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { Billboard, OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import { Bloom, ChromaticAberration, EffectComposer } from '@react-three/postprocessing';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -14,6 +14,7 @@ import {
   Float32BufferAttribute,
   PlaneGeometry,
   SRGBColorSpace,
+  TextureLoader,
   Vector2,
   Vector3,
 } from 'three';
@@ -25,6 +26,7 @@ const PROJECTS = [
   {
     title: 'Nowin Especias',
     category: 'E-commerce',
+    contribution: 'Frontend · comercio digital.',
     description: 'Plataforma e-commerce y panel administrativo para la gestión de ventas e inventario.',
     technologies: ['React', 'Vite', 'Tailwind CSS', 'Firebase'],
     url: 'https://nowinespecias.com',
@@ -33,6 +35,7 @@ const PROJECTS = [
   {
     title: 'Artes del Fuego',
     category: 'Gestión & cerámica',
+    contribution: 'Administración y coordinación operativa.',
     description: 'Sistema de inventario y gestión de stock para materiales cerámicos, hornos y herramientas del taller.',
     technologies: ['React', 'Vite', 'Tailwind CSS', 'Firebase'],
     url: 'https://artesdelfuego.vercel.app',
@@ -41,6 +44,7 @@ const PROJECTS = [
   {
     title: 'Interfaces & Dashboards',
     category: 'Diseño UI/UX',
+    contribution: 'Diseño UI/UX · prototipado interactivo.',
     description: 'Prototipos interactivos y componentes animados inspirados en la astronomía y la observación estelar.',
     technologies: ['Figma', 'Framer Motion', 'GSAP'],
     accent: '#c084fc',
@@ -207,6 +211,12 @@ function SceneReady({ onReady }) {
   return null;
 }
 
+function cloneSRGBTexture(texture) {
+  const clone = texture.clone();
+  clone.colorSpace = SRGBColorSpace;
+  return clone;
+}
+
 function SpatialAudioListener({ updateAudioListener }) {
   const forward = useMemo(() => new Vector3(), []);
   const up = useMemo(() => new Vector3(), []);
@@ -317,157 +327,92 @@ function GoldenSecretParticles({ active, paused }) {
   );
 }
 
-function AudioReactiveCore({ audioLevel, paused }) {
-  const lightRef = useRef(null);
+function Earth({ paused }) {
+  const earthRef = useRef(null);
+  const cloudsRef = useRef(null);
+  const [surfaceTexture, cloudsMap] = useLoader(TextureLoader, [
+    '/textures/celestial/earth_atmos_2048.jpg',
+    '/textures/celestial/earth_clouds_1024.png',
+  ]);
+  const surfaceMap = useMemo(() => cloneSRGBTexture(surfaceTexture), [surfaceTexture]);
+  useEffect(() => () => surfaceMap.dispose(), [surfaceMap]);
 
-  useFrame(({ clock }, delta) => {
-    if (!lightRef.current || paused) return;
-    const targetIntensity = 16 + audioLevel * 1.6 + Math.sin(clock.elapsedTime * 0.8) * 0.12;
-    lightRef.current.intensity += (targetIntensity - lightRef.current.intensity) * (1 - Math.exp(-delta * 4));
-  });
-
-  return <pointLight ref={lightRef} color="#ffb347" intensity={16} distance={32} decay={2} />;
-}
-
-function createSolarTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 512;
-  const context = canvas.getContext('2d');
-  if (!context) {
-    throw new Error('No se pudo crear la textura procedural del Sol.');
-  }
-
-  const base = context.createLinearGradient(0, 0, canvas.width, canvas.height);
-  base.addColorStop(0, '#8f1b08');
-  base.addColorStop(0.22, '#f45a0a');
-  base.addColorStop(0.48, '#ffc348');
-  base.addColorStop(0.7, '#e84308');
-  base.addColorStop(1, '#6e160c');
-  context.fillStyle = base;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  const glow = context.createRadialGradient(510, 250, 12, 510, 250, 460);
-  glow.addColorStop(0, 'rgba(255, 249, 204, 0.95)');
-  glow.addColorStop(0.12, 'rgba(255, 205, 75, 0.72)');
-  glow.addColorStop(0.48, 'rgba(255, 96, 15, 0.18)');
-  glow.addColorStop(1, 'rgba(80, 8, 8, 0.12)');
-  context.fillStyle = glow;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  const strokeColors = ['#fff3bd', '#ffd052', '#ff9b20', '#f24b13', '#fffaf0'];
-  for (let index = 0; index < 150; index += 1) {
-    const seed = index * 12.9898;
-    const x = ((Math.sin(seed) * 43758.5453) % 1 + 1) % 1 * canvas.width;
-    const y = ((Math.sin(seed + 78.233) * 19341.173) % 1 + 1) % 1 * canvas.height;
-    const length = 24 + ((Math.sin(seed + 19.19) + 1) * 0.5) * 120;
-    const bend = 12 + ((Math.sin(seed + 3.71) + 1) * 0.5) * 42;
-    const direction = Math.sin(seed + 6.4) * 0.85;
-
-    context.beginPath();
-    context.moveTo(x - length / 2, y);
-    context.bezierCurveTo(
-      x - length * 0.18,
-      y - bend,
-      x + length * 0.18,
-      y + bend * direction,
-      x + length / 2,
-      y + Math.sin(seed + 2.2) * 10,
-    );
-    context.strokeStyle = strokeColors[index % strokeColors.length];
-    context.globalAlpha = 0.16 + ((Math.sin(seed + 5.1) + 1) * 0.5) * 0.34;
-    context.lineWidth = 1 + ((Math.sin(seed + 8.3) + 1) * 0.5) * 5;
-    context.lineCap = 'round';
-    context.stroke();
-  }
-  context.globalAlpha = 1;
-
-  for (let index = 0; index < 24; index += 1) {
-    const angle = (index / 24) * Math.PI * 2;
-    const x = 510 + Math.cos(angle) * (70 + (index % 4) * 17);
-    const y = 250 + Math.sin(angle) * (38 + (index % 3) * 15);
-    const flare = context.createRadialGradient(x, y, 0, x, y, 12 + (index % 5) * 4);
-    flare.addColorStop(0, 'rgba(255, 255, 237, 0.95)');
-    flare.addColorStop(1, 'rgba(255, 247, 207, 0)');
-    context.fillStyle = flare;
-    context.fillRect(x - 24, y - 24, 48, 48);
-  }
-
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  texture.needsUpdate = true;
-  return texture;
-}
-
-function StellarSun({ audioLevel, paused }) {
-  const sunRef = useRef(null);
-  const coronaRef = useRef(null);
-  const outerCoronaRef = useRef(null);
-  const materialRef = useRef(null);
-  const texture = useMemo(() => createSolarTexture(), []);
-
-  useEffect(() => () => texture.dispose(), [texture]);
-
-  useFrame(({ clock }, delta) => {
+  useFrame((_, delta) => {
     if (paused) return;
-
-    if (sunRef.current) {
-      sunRef.current.rotation.y += delta * 0.035;
-      sunRef.current.rotation.x = Math.sin(clock.elapsedTime * 0.12) * 0.025;
-    }
-    const pulse = 1 + Math.sin(clock.elapsedTime * 0.8) * 0.018 + audioLevel * 0.025;
-    if (coronaRef.current) {
-      coronaRef.current.scale.setScalar(1.16 * pulse);
-      coronaRef.current.rotation.y -= delta * 0.018;
-    }
-    if (outerCoronaRef.current) {
-      outerCoronaRef.current.scale.setScalar(1.36 * (2 - pulse));
-      outerCoronaRef.current.rotation.y += delta * 0.012;
-    }
-    if (materialRef.current) {
-      materialRef.current.emissiveIntensity = 1.35 + audioLevel * 0.9;
-    }
+    if (earthRef.current) earthRef.current.rotation.y += delta * 0.018;
+    if (cloudsRef.current) cloudsRef.current.rotation.y += delta * 0.022;
   });
 
   return (
     <group>
-      <mesh ref={sunRef}>
+      <directionalLight position={[5, 3, 7]} color="#dcecff" intensity={2.2} />
+      <mesh ref={earthRef}>
         <sphereGeometry args={[1.28, 96, 96]} />
+        <meshStandardMaterial map={surfaceMap} roughness={0.88} metalness={0.02} />
+      </mesh>
+      <mesh ref={cloudsRef} scale={1.012}>
+        <sphereGeometry args={[1.28, 64, 64]} />
         <meshStandardMaterial
-          ref={materialRef}
-          map={texture}
-          emissive="#ff7a16"
-          emissiveMap={texture}
-          emissiveIntensity={1.35}
-          roughness={0.78}
-          metalness={0}
-          toneMapped={false}
+          alphaMap={cloudsMap}
+          color="#ffffff"
+          transparent
+          opacity={0.48}
+          depthWrite={false}
+          roughness={1}
         />
       </mesh>
-      <mesh ref={coronaRef}>
-        <sphereGeometry args={[1.28, 48, 48]} />
+      <mesh scale={1.055}>
+        <sphereGeometry args={[1.28, 64, 64]} />
         <meshBasicMaterial
-          color="#ff8b1c"
+          color="#58aaff"
           side={BackSide}
           blending={AdditiveBlending}
           transparent
-          opacity={0.12}
+          opacity={0.18}
           depthWrite={false}
           toneMapped={false}
         />
       </mesh>
-      <mesh ref={outerCoronaRef}>
-        <sphereGeometry args={[1.28, 40, 40]} />
-        <meshBasicMaterial
-          color="#ffcc62"
-          side={BackSide}
-          blending={AdditiveBlending}
-          transparent
-          opacity={0.045}
-          depthWrite={false}
-          toneMapped={false}
-        />
+    </group>
+  );
+}
+
+function OrbitingMoon({ paused, focusRef, onSelect, onPointerOver, onPointerOut }) {
+  const orbitRef = useRef(null);
+  const moonRef = useRef(null);
+  const [surfaceTexture] = useLoader(TextureLoader, ['/textures/celestial/moon_1024.jpg']);
+  const surfaceMap = useMemo(() => cloneSRGBTexture(surfaceTexture), [surfaceTexture]);
+  useEffect(() => () => surfaceMap.dispose(), [surfaceMap]);
+
+  useFrame((_, delta) => {
+    if (paused) return;
+    if (orbitRef.current) orbitRef.current.rotation.y += delta * 0.14;
+    if (moonRef.current) moonRef.current.rotation.y += delta * 0.035;
+  });
+
+  return (
+    <group>
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[3.75, 3.77, 96]} />
+        <meshBasicMaterial color="#b9d8ff" transparent opacity={0.18} depthWrite={false} />
       </mesh>
+      <group ref={orbitRef}>
+        <group
+          ref={focusRef}
+          position={[3.76, 0, 0]}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect();
+          }}
+          onPointerOver={onPointerOver}
+          onPointerOut={onPointerOut}
+        >
+          <mesh ref={moonRef}>
+            <sphereGeometry args={[0.42, 48, 48]} />
+            <meshStandardMaterial map={surfaceMap} roughness={0.96} metalness={0} />
+          </mesh>
+        </group>
+      </group>
     </group>
   );
 }
@@ -1069,30 +1014,44 @@ function ProjectTitlePreview({ title, role, category, accent, index, technologie
   );
 }
 
-function CameraFlight({ activeModule, resetKey, controlsRef, focusRefs, onFlightComplete, reducedMotion }) {
+function CameraFlight({
+  activeModule,
+  initialFocus,
+  ready,
+  resetKey,
+  controlsRef,
+  focusRefs,
+  onFlightComplete,
+  reducedMotion,
+}) {
   const destinationRef = useRef(null);
 
   useEffect(() => {
-    const focusRef = focusRefs[activeModule];
+    if (!ready) return;
+    const focusKey = activeModule ?? initialFocus;
+    const focusRef = focusRefs[focusKey];
     const target = new Vector3();
     const position = new Vector3();
 
     if (focusRef?.current) {
       focusRef.current.getWorldPosition(target);
-      const isCore = activeModule === 'NUCLEO';
+      const isCore = focusKey === 'NUCLEO';
       const portalDistance = isCore ? 4.2 : 2.5;
       position.set(
         target.x,
         target.y + (isCore ? 0.7 : 0.35),
         target.z + portalDistance,
       );
+    } else if (focusKey === 'NUCLEO') {
+      target.set(0, 0, 0);
+      position.set(0, 0.7, 4.2);
     } else {
       target.set(0, 0, 0);
       position.set(0, 6, 16);
     }
 
     destinationRef.current = { position, target };
-  }, [activeModule, focusRefs, resetKey]);
+  }, [activeModule, focusRefs, initialFocus, ready, resetKey]);
 
   useFrame(({ camera }, delta) => {
     const destination = destinationRef.current;
@@ -1108,7 +1067,7 @@ function CameraFlight({ activeModule, resetKey, controlsRef, focusRefs, onFlight
       return;
     }
 
-    const smoothing = 1 - Math.exp(-delta * 2.5);
+    const smoothing = 1 - Math.exp(-delta * (initialFocus && !activeModule ? 5 : 2.5));
     camera.position.lerp(destination.position, smoothing);
     controls.target.lerp(destination.target, smoothing);
     controls.update();
@@ -1178,7 +1137,7 @@ function ProjectCarousel({ selectedIndex, onSelect, children }) {
 export default function Galaxia({ isIntro = false, isEntered = false, style, onExitToRealWorld }) {
   const [activeModule, setActiveModule] = useState(null);
   const [flightModule, setFlightModule] = useState(null);
-  const [isFlying, setIsFlying] = useState(false);
+  const [isFlying, setIsFlying] = useState(isEntered);
   const [isOrbitPaused, setIsOrbitPaused] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -1205,6 +1164,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
   } = useAppAudio();
   const controlsRef = useRef(null);
   const canvasShellRef = useRef(null);
+  const indexToggleRef = useRef(null);
   const dialogRef = useRef(null);
   const dialogCloseRef = useRef(null);
   const dialogTriggerRef = useRef(null);
@@ -1212,17 +1172,20 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
   const secretClickRef = useRef({ count: 0, lastClick: 0 });
   const secretTimeoutRef = useRef(null);
   const coreRef = useRef(null);
+  const moonRef = useRef(null);
   const projectsRef = useRef(null);
   const credentialsRef = useRef(null);
   const contactRef = useRef(null);
   const [selectedProjectIndex, setSelectedProjectIndex] = useState(0);
   const focusRefs = useMemo(() => ({
     NUCLEO: coreRef,
+    ASTROFOTOS: moonRef,
     PROYECTOS: projectsRef,
     CREDENCIALES: credentialsRef,
     CONTACTO: contactRef,
   }), []);
   const [isSecretActive, setIsSecretActive] = useState(false);
+  const [emailCopyStatus, setEmailCopyStatus] = useState('');
   const areOrbitsPaused = isOrbitPaused || prefersReducedMotion;
 
   useEffect(() => {
@@ -1292,11 +1255,18 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         ? document.activeElement
         : null;
     }
+    setEmailCopyStatus('');
     playSound('open');
     setActiveModule(null);
     setFlightModule(module);
     setIsFlying(true);
   }, [playSound]);
+  const openIndexedModule = useCallback((module, projectIndex) => {
+    if (typeof projectIndex === 'number') setSelectedProjectIndex(projectIndex);
+    setIsIndexOpen(false);
+    openModule(module);
+    dialogTriggerRef.current = indexToggleRef.current;
+  }, [openModule]);
   const finishSolarExit = useCallback(() => {
     onExitToRealWorld?.();
   }, [onExitToRealWorld]);
@@ -1322,6 +1292,14 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
     setIsFlying(true);
     window.requestAnimationFrame(() => dialogTriggerRef.current?.focus());
   }, [playSound]);
+  const copyEmail = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText('00gabrielaedwin00@gmail.com');
+      setEmailCopyStatus('Correo copiado al portapapeles.');
+    } catch {
+      setEmailCopyStatus('No se pudo copiar. Puedes seleccionar el correo y copiarlo manualmente.');
+    }
+  }, []);
 
   useEffect(() => {
     if (activeModule) dialogCloseRef.current?.focus();
@@ -1348,14 +1326,15 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         if (!prefersReducedMotion) setIsOrbitPaused((paused) => !paused);
       } else if (event.key.toLowerCase() === 'm') {
         toggleAudio();
-      } else if (event.key === 'Escape' && (activeModule || flightModule)) {
-        closeModule();
+      } else if (event.key === 'Escape') {
+        if (activeModule || flightModule) closeModule();
+        else if (isIndexOpen) setIsIndexOpen(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeModule, closeModule, flightModule, prefersReducedMotion, toggleAudio]);
+  }, [activeModule, closeModule, flightModule, isIndexOpen, prefersReducedMotion, toggleAudio]);
   const handleFlightComplete = (module) => {
     if (module) {
       setActiveModule(module);
@@ -1393,6 +1372,8 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         <SpatialAudioListener updateAudioListener={updateAudioListener} />
         <CameraFlight
           activeModule={flightModule}
+          initialFocus={isEntered ? 'NUCLEO' : null}
+          ready={sceneReady}
           resetKey={cameraResetKey}
           controlsRef={controlsRef}
           focusRefs={focusRefs}
@@ -1447,10 +1428,18 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         <group visible={!isIntro}>
         <CosmicBackdrop paused={prefersReducedMotion} />
 
-        <group ref={coreRef} onClick={handleSunClick} onPointerOver={handleObjectHover} onPointerOut={handleObjectPointerOut}>
-          <AudioReactiveCore audioLevel={audioLevel} paused={prefersReducedMotion} />
-          <StellarSun audioLevel={audioLevel} paused={prefersReducedMotion} />
-        </group>
+        <Suspense fallback={null}>
+          <group ref={coreRef} onClick={handleSunClick} onPointerOver={handleObjectHover} onPointerOut={handleObjectPointerOut}>
+            <Earth paused={prefersReducedMotion} />
+          </group>
+          <OrbitingMoon
+            paused={areOrbitsPaused || isFlying || activeModule === 'ASTROFOTOS'}
+            focusRef={moonRef}
+            onSelect={() => openModule('ASTROFOTOS')}
+            onPointerOver={handleObjectHover}
+            onPointerOut={handleObjectPointerOut}
+          />
+        </Suspense>
 
         <OrbitingPortal
           position={[-5.7, 2.93, 0.55]}
@@ -1513,9 +1502,11 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             type="button"
             data-cursor
             onClick={handleSunClick}
-            className="absolute left-4 top-4 z-[70] min-h-11 border border-cyan-100/20 bg-[#050817]/75 px-4 py-2 font-mono text-[9px] tracking-[0.12em] text-white/80 shadow-[0_12px_40px_rgba(0,0,0,0.3)] backdrop-blur-xl transition hover:border-cyan-100/55 hover:bg-cyan-100/10 hover:text-cyan-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 sm:left-6 sm:top-6 sm:text-[10px]"
+            aria-label="Volver al sendero"
+            className="fixed bottom-6 left-4 z-[60] flex h-11 min-h-11 w-11 items-center justify-center border border-white/15 bg-[#050817]/80 font-mono text-base text-white/80 shadow-[0_12px_40px_rgba(0,0,0,0.3)] backdrop-blur-xl transition hover:border-cyan-100/45 hover:bg-[#050817]/90 hover:text-cyan-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 sm:left-1/2 sm:h-auto sm:w-auto sm:-translate-x-1/2 sm:px-4 sm:py-2 sm:text-[10px]"
           >
-            ← VOLVER AL SENDERO
+            <span className="sm:hidden" aria-hidden="true">←</span>
+            <span className="hidden sm:inline">← VOLVER AL SENDERO</span>
           </button>
           <nav
             aria-label="Zonas principales"
@@ -1523,6 +1514,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
           >
             {[
               ['PROYECTOS', 'Proyectos'],
+              ['ASTROFOTOS', 'Astrofotos'],
               ['CREDENCIALES', 'Credenciales'],
               ['CONTACTO', 'Contacto'],
             ].map(([module, label]) => (
@@ -1547,12 +1539,25 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 5 }}
-                style={{ x: '-50%' }}
                 transition={{ duration: 0.35, ease: 'easeOut' }}
-                className="absolute bottom-24 left-1/2 z-[70] w-[min(92vw,34rem)] -translate-x-1/2 border border-white/10 bg-[#050817]/70 px-4 py-3 text-center font-mono text-[9px] leading-relaxed tracking-wide text-white/65 shadow-[0_12px_40px_rgba(0,0,0,0.3)] backdrop-blur-xl sm:text-[10px]"
-                role="status"
+                className="absolute bottom-24 left-1/2 z-[70] flex w-[min(92vw,34rem)] -translate-x-1/2 items-start gap-3 border border-white/10 bg-[#050817]/85 px-4 py-3 font-mono text-[10px] leading-relaxed tracking-wide text-white/75 shadow-[0_12px_40px_rgba(0,0,0,0.3)] backdrop-blur-xl sm:text-xs"
+                role="note"
+                aria-label="Ayuda de navegación"
               >
-                [ ✦ ] Cristal: proyectos · planeta dorado: credenciales · satélite: contacto
+                <p className="flex-1">
+                  [ ✦ ] Explora los portales o abre el índice ≡ para ir directamente a cada sección y proyecto.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    toastDismissedRef.current = true;
+                    setShowNavigationToast(false);
+                  }}
+                  aria-label="Descartar ayuda de navegación"
+                  className="flex h-11 min-w-11 items-center justify-center border border-white/15 text-sm text-white/70 transition hover:border-white/40 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+                >
+                  ×
+                </button>
               </motion.div>
             )}
           </AnimatePresence>
@@ -1567,7 +1572,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             </p>
           )}
 
-          <div className="absolute bottom-5 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-[#050817]/80 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+          <div className="absolute bottom-5 right-5 z-[70] flex items-center gap-1 rounded-full border border-white/10 bg-[#050817]/80 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
             <button
               type="button"
               data-cursor
@@ -1608,9 +1613,11 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             <button
               type="button"
               data-cursor
+              ref={indexToggleRef}
               onClick={() => setIsIndexOpen((open) => !open)}
               aria-label={isIndexOpen ? 'Cerrar índice de portales' : 'Abrir índice de portales'}
               aria-expanded={isIndexOpen}
+              aria-controls="portal-index"
               title="Índice de portales"
               className="flex h-11 w-11 items-center justify-center rounded-full border border-transparent font-mono text-base text-white/75 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
             >
@@ -1624,28 +1631,54 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                 initial={{ opacity: 0, y: 10, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                style={{ x: '-50%' }}
                 transition={{ duration: 0.2, ease: 'easeOut' }}
-                aria-label="Índice de portales"
-                className="absolute bottom-20 left-1/2 z-[70] w-[min(88vw,20rem)] -translate-x-1/2 border border-white/10 bg-[#050817]/90 p-2 font-mono shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+                id="portal-index"
+                aria-label="Índice alternativo del portfolio"
+                className="absolute bottom-20 right-5 z-[70] max-h-[min(70vh,36rem)] w-[min(90vw,22rem)] overflow-y-auto border border-white/10 bg-[#050817]/95 p-3 font-mono shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
               >
-                {                [
-                  ['PROYECTOS', 'Carrusel de proyectos'],
-                  ['CREDENCIALES', 'Títulos & credenciales'],
-                  ['CONTACTO', 'Satélite de contacto'],
-                ].map(([module, label], index) => (
+                <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-white/45">Explorar por contenido</p>
+                <button
+                  type="button"
+                  data-cursor
+                  onClick={() => openIndexedModule('NUCLEO')}
+                  className="flex min-h-11 w-full items-center justify-between border-t border-white/[0.07] px-3 py-3 text-left text-xs text-white/75 transition hover:bg-white/[0.04] hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+                >
+                  <span>Quién soy</span><span className="text-white/35">01 ↗</span>
+                </button>
+                <div className="border-t border-white/[0.07] py-2">
+                  <p className="px-3 py-2 text-[9px] uppercase tracking-[0.16em] text-purple-100/60">Proyectos</p>
+                  {PROJECTS.map((project, index) => (
+                    <button
+                      key={project.title}
+                      type="button"
+                      data-cursor
+                      onClick={() => openIndexedModule('PROYECTOS', index)}
+                      className="flex min-h-11 w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs text-white/70 transition hover:bg-white/[0.04] hover:text-purple-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200"
+                    >
+                      <span>{project.title}</span>                      <span className="shrink-0 text-[10px] text-white/35">0{index + 2} →</span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  data-cursor
+                  onClick={() => openIndexedModule('ASTROFOTOS')}
+                  className="flex min-h-11 w-full items-center justify-between border-t border-white/[0.07] px-3 py-3 text-left text-xs text-white/75 transition hover:bg-white/[0.04] hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+                >
+                  <span>Astrofotografía</span><span className="text-white/35">05 →</span>
+                </button>
+                {[
+                  ['CREDENCIALES', 'Credenciales', '06'],
+                  ['CONTACTO', 'Contacto', '07'],
+                ].map(([module, label, index]) => (
                   <button
                     key={module}
                     type="button"
                     data-cursor
-                    onClick={() => {
-                      setIsIndexOpen(false);
-                      openModule(module);
-                    }}
-                    className="flex w-full items-center justify-between border-b border-white/[0.07] px-3 py-3 text-left text-[9px] uppercase tracking-[0.12em] text-white/65 transition last:border-b-0 hover:bg-white/[0.04] hover:text-cyan-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-cyan-200"
+                    onClick={() => openIndexedModule(module)}
+                    className="flex min-h-11 w-full items-center justify-between border-t border-white/[0.07] px-3 py-3 text-left text-xs text-white/75 transition hover:bg-white/[0.04] hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
                   >
-                    <span>{label}</span>
-                    <span className="text-white/30">0{index + 1} ↗</span>
+                    <span>{label}</span><span className="text-white/35">{index} →</span>
                   </button>
                 ))}
               </motion.nav>
@@ -1655,7 +1688,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
       )}
 
       <AnimatePresence>
-        {isLoading && !isIntro && (
+        {isLoading && !isIntro && !isEntered && (
           <motion.div
             initial={{ opacity: 1 }}
             animate={{ opacity: 1 }}
@@ -1670,7 +1703,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                 SISTEMA GALÁCTICO
               </p>
               <h2 className="mb-7 text-center text-2xl font-bold tracking-[0.18em]">
-                GABI EDWIN
+                GABY EDWIN
               </h2>
               <div className="h-1 overflow-hidden rounded-full bg-white/10">
                 <motion.div
@@ -1732,11 +1765,11 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
               type="button"
               onClick={closeModule}
               aria-label="Cerrar portal y volver a la galaxia"
-              className="absolute right-4 top-4 border border-white/15 px-3 py-2 font-mono text-xs text-white/65 transition-colors hover:border-white/45 hover:text-white focus-visible:outline focus-visible:outline-1 focus-visible:outline-white/70"
+              className="absolute right-4 top-4 flex min-h-11 min-w-11 items-center justify-center border border-white/15 px-3 py-2 font-mono text-xs text-white/75 transition-colors hover:border-white/45 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
             >
               [✕]
             </button>
-            <div className="mb-7 flex items-center justify-between border-b border-white/10 pb-3 pr-16 text-[8px] uppercase tracking-[0.2em] text-white/40">
+            <div className="mb-7 flex items-center justify-between border-b border-white/10 pb-3 pr-16 text-[10px] uppercase tracking-[0.16em] text-white/50">
               <span>Portal / expediente</span>
               <span>{activeModule}</span>
             </div>
@@ -1800,36 +1833,68 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
               </div>
             )}
 
+            {activeModule === 'ASTROFOTOS' && (
+              <div className="space-y-6">
+                <header className="border-b border-cyan-200/10 pb-5">
+                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-cyan-200/70">Archivo lunar / 03</p>
+                  <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Astrofotografía</h2>
+                  <p className="mt-2 text-sm text-slate-300">Una colección personal de observaciones del cielo nocturno.</p>
+                </header>
+                <section
+                  role="status"
+                  className="border border-cyan-100/15 bg-gradient-to-br from-cyan-300/[0.07] via-white/[0.02] to-transparent p-6 text-center sm:p-9"
+                >
+                  <span className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-full border border-cyan-100/20 text-2xl text-cyan-100/80" aria-hidden="true">
+                    ✦
+                  </span>
+                  <h3 className="text-lg font-medium text-white">La colección está en preparación</h3>
+                  <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-slate-300">
+                    Este proyecto todavía no incluye astrofotografías personales. Cuando agregues tus capturas, aparecerán aquí sin confundirlas con las texturas ilustrativas de la escena.
+                  </p>
+                </section>
+                <p className="border-l border-cyan-100/25 pl-4 text-[10px] leading-relaxed text-white/45">
+                  Texturas cartográficas de la escena: ejemplos de planetas de Three.js. No son fotografías personales.
+                </p>
+              </div>
+            )}
+
             {activeModule === 'CREDENCIALES' && (
               <div className="space-y-6">
                 <header className="border-b border-amber-200/10 pb-5">
-                  <p className="mb-3 text-[9px] uppercase tracking-[0.22em] text-amber-200/65">Archivo estelar / 02</p>
+                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-amber-200/70">Archivo estelar / 02</p>
                   <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Títulos & credenciales</h2>
-                  <p className="mt-2 text-xs text-slate-400">Formación académica y certificaciones.</p>
+                  <p className="mt-2 text-sm text-slate-300">Formación académica y certificaciones.</p>
                 </header>
                 <section>
-                  <h3 className="mb-3 text-[9px] uppercase tracking-[0.2em] text-amber-100/55">Títulos universitarios</h3>
-                  <div className="divide-y divide-white/10 border-y border-white/10">
-                    <p className="py-3 text-xs leading-relaxed text-slate-200">Licenciatura en Arte Digital y Multimedia <span className="text-slate-400">— TECH Universidad Tecnológica</span></p>
-                    <p className="py-3 text-xs leading-relaxed text-slate-200">Máster en Inteligencia Artificial en Diseño <span className="text-slate-400">— TECH</span></p>
+                  <h3 className="mb-3 text-[10px] uppercase tracking-[0.2em] text-amber-100/65">Títulos universitarios</h3>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {[
+                      ['Licenciatura en Arte Digital y Multimedia', 'TECH Universidad Tecnológica'],
+                      ['Máster en Inteligencia Artificial en Diseño', 'TECH'],
+                    ].map(([title, institution]) => (
+                      <article key={title} className="border border-white/10 bg-white/[0.025] p-4">
+                        <h4 className="text-sm leading-relaxed text-slate-100">{title}</h4>
+                        <p className="mt-2 text-xs leading-relaxed text-amber-100/70">{institution}</p>
+                      </article>
+                    ))}
                   </div>
                 </section>
                 <section>
-                  <h3 className="mb-3 text-[9px] uppercase tracking-[0.2em] text-amber-100/55">Certificaciones & formación</h3>
-                  <div className="grid gap-px border border-white/10 bg-white/10 sm:grid-cols-2">
+                  <h3 className="mb-3 text-[10px] uppercase tracking-[0.2em] text-amber-100/65">Certificaciones & formación</h3>
+                  <div className="grid gap-3 sm:grid-cols-2">
                     {[
                       ['Desarrollo Web', 'Coderhouse'],
                       ['React.js', 'Coderhouse'],
                       ['JavaScript', 'Coderhouse'],
                       ['Intérprete certificada de LSA', 'UNaM · Humanidades'],
                     ].map(([title, institution]) => (
-                      <div key={title} className="bg-[#070a14] p-4">
-                        <p className="text-xs text-slate-100">{title}</p>
-                        <p className="mt-1 text-[9px] uppercase tracking-wider text-amber-200/60">{institution}</p>
-                      </div>
+                      <article key={title} className="border border-white/10 bg-white/[0.025] p-4">
+                        <h4 className="text-sm text-slate-100">{title}</h4>
+                        <p className="mt-2 text-xs leading-relaxed text-amber-100/70">{institution}</p>
+                      </article>
                     ))}
                   </div>
-                  <p className="mt-3 text-[10px] text-slate-400">Graduada en el top 10% de su cohorte.</p>
+                  <p className="mt-3 text-xs leading-relaxed text-slate-300">Graduada en el top 10% de su cohorte.</p>
                 </section>
               </div>
             )}
@@ -1837,8 +1902,9 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             {activeModule === 'PROYECTOS' && (
               <ProjectCarousel selectedIndex={selectedProjectIndex} onSelect={setSelectedProjectIndex}>
                 <header className="border-b border-purple-200/10 pb-4">
-                  <p className="mb-2 text-[9px] uppercase tracking-[0.22em] text-purple-200/65">Órbita creativa / 01</p>
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.22em] text-purple-200/70">Órbita creativa / 01</p>
                   <h2 className="text-2xl font-semibold tracking-[-0.05em] text-white sm:text-3xl">Carrusel de proyectos</h2>
+                  <p className="mt-2 text-sm text-slate-300">Explora el alcance, mi aporte y las herramientas de cada proyecto.</p>
                 </header>
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
@@ -1852,7 +1918,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                     aria-atomic="true"
                   >
                     <div className="mb-6 flex items-center justify-between">
-                      <span className="text-[9px] uppercase tracking-[0.2em] text-purple-100/60">
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-purple-100/70">
                         {PROJECTS[selectedProjectIndex].category}
                       </span>
                       <span className="font-mono text-[10px] text-white/35">
@@ -1862,14 +1928,25 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                     <h3 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
                       {PROJECTS[selectedProjectIndex].title}
                     </h3>
-                    <p className="mt-3 max-w-xl text-xs leading-relaxed text-slate-300">
-                      {PROJECTS[selectedProjectIndex].description}
-                    </p>
+                    <div className="mt-5 grid gap-4 border-t border-white/10 pt-4 sm:grid-cols-2">
+                      <section>
+                        <h4 className="mb-2 text-[10px] uppercase tracking-[0.16em] text-white/50">Alcance</h4>
+                        <p className="text-sm leading-relaxed text-slate-200">
+                          {PROJECTS[selectedProjectIndex].description}
+                        </p>
+                      </section>
+                      <section>
+                        <h4 className="mb-2 text-[10px] uppercase tracking-[0.16em] text-white/50">Mi aporte</h4>
+                        <p className="text-sm leading-relaxed text-slate-200">
+                          {PROJECTS[selectedProjectIndex].contribution}
+                        </p>
+                      </section>
+                    </div>
                     <div className="mt-5 flex flex-wrap gap-2">
                       {PROJECTS[selectedProjectIndex].technologies.map((technology) => (
                         <span
                           key={technology}
-                          className="border border-white/10 px-2 py-1 text-[9px] text-white/70"
+                          className="border border-white/10 px-3 py-1.5 text-xs text-white/75"
                         >
                           {technology}
                         </span>
@@ -1880,24 +1957,25 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                         href={PROJECTS[selectedProjectIndex].url}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-6 inline-flex border border-purple-200/30 px-3 py-2 text-[9px] uppercase tracking-[0.12em] text-purple-100 transition hover:border-purple-100/70 hover:bg-purple-200/5"
+                        className="mt-6 inline-flex min-h-11 items-center border border-purple-200/40 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-purple-100 transition hover:border-purple-100/80 hover:bg-purple-200/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200"
                       >
                         Visitar proyecto ↗
                       </a>
                     )}
                   </motion.div>
                 </AnimatePresence>
-                <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center justify-between gap-2">
                   <button
                     type="button"
                     data-cursor
                     onClick={() => setSelectedProjectIndex((index) => (index + PROJECTS.length - 1) % PROJECTS.length)}
                     aria-label="Ver proyecto anterior"
-                    className="border border-white/15 px-4 py-2 text-xs text-white/75 transition hover:border-purple-200/60 hover:text-white"
+                    className="flex min-h-11 min-w-11 items-center justify-center border border-white/15 px-2 py-2 text-xs text-white/80 transition hover:border-purple-200/60 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:px-4 sm:text-sm"
                   >
-                    ← Anterior
+                    <span className="sm:hidden" aria-hidden="true">←</span>
+                    <span className="hidden sm:inline">← Anterior</span>
                   </button>
-                  <div className="flex gap-2" aria-label="Seleccionar proyecto">
+                  <div className="flex gap-0 sm:gap-2" aria-label="Seleccionar proyecto">
                     {PROJECTS.map((project, index) => (
                       <button
                         key={project.title}
@@ -1906,8 +1984,13 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                         onClick={() => setSelectedProjectIndex(index)}
                         aria-label={`Ver ${project.title}`}
                         aria-pressed={selectedProjectIndex === index}
-                        className={`h-2.5 w-2.5 rounded-full transition ${selectedProjectIndex === index ? 'bg-purple-200 shadow-[0_0_12px_rgba(216,180,254,0.75)]' : 'bg-white/25 hover:bg-white/60'}`}
-                      />
+                        className="group flex h-9 w-9 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:h-11 sm:w-11"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`h-2.5 w-2.5 rounded-full transition ${selectedProjectIndex === index ? 'bg-purple-200 shadow-[0_0_12px_rgba(216,180,254,0.75)]' : 'bg-white/25 group-hover:bg-white/60'}`}
+                        />
+                      </button>
                     ))}
                   </div>
                   <button
@@ -1915,9 +1998,10 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                     data-cursor
                     onClick={() => setSelectedProjectIndex((index) => (index + 1) % PROJECTS.length)}
                     aria-label="Ver proyecto siguiente"
-                    className="border border-white/15 px-4 py-2 text-xs text-white/75 transition hover:border-purple-200/60 hover:text-white"
+                    className="flex min-h-11 min-w-11 items-center justify-center border border-white/15 px-2 py-2 text-xs text-white/80 transition hover:border-purple-200/60 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:px-4 sm:text-sm"
                   >
-                    Siguiente →
+                    <span className="sm:hidden" aria-hidden="true">→</span>
+                    <span className="hidden sm:inline">Siguiente →</span>
                   </button>
                 </div>
               </ProjectCarousel>
@@ -2069,35 +2153,55 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             )}
 
             {activeModule === 'CONTACTO' && (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <header className="mb-5 border-b border-cyan-200/10 pb-4">
-                  <p className="mb-2 text-[9px] uppercase tracking-[0.22em] text-cyan-100/60">Satélite de comunicaciones</p>
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.22em] text-cyan-100/70">Satélite de comunicaciones</p>
                   <h2 className="text-2xl font-semibold tracking-[-0.05em] text-white">Conectemos</h2>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-300">Elige cómo te gustaría iniciar la conversación.</p>
                 </header>
+                <section className="border border-cyan-200/20 bg-cyan-200/[0.04] p-4">
+                  <h3 className="text-[10px] uppercase tracking-[0.16em] text-cyan-100/65">Correo electrónico</h3>
+                  <p className="mt-2 break-all text-sm leading-relaxed text-white">
+                    00gabrielaedwin00@gmail.com
+                  </p>
+                  <button
+                    type="button"
+                    data-cursor
+                    onClick={copyEmail}
+                    className="mt-4 inline-flex min-h-11 items-center border border-cyan-200/35 px-4 py-2 text-xs text-cyan-50 transition hover:border-cyan-100/75 hover:bg-cyan-100/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+                  >
+                    Copiar correo
+                  </button>
+                  {emailCopyStatus && (
+                    <p className="mt-3 text-xs leading-relaxed text-cyan-100/80" role="status" aria-live="polite">
+                      {emailCopyStatus}
+                    </p>
+                  )}
+                </section>
+                <a
+                  href="mailto:00gabrielaedwin00@gmail.com"
+                  className="group flex min-h-12 items-center justify-between border border-orange-200/25 bg-orange-200/[0.04] px-4 py-3 text-sm text-orange-50/90 transition hover:border-orange-200/60 hover:text-white hover:shadow-[0_0_28px_rgba(251,146,60,0.12)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-orange-200"
+                >
+                  <span>Redactar correo</span><span aria-hidden="true" className="text-orange-100/60 transition group-hover:text-orange-100">↗</span>
+                </a>
                 <a
                   href="https://www.linkedin.com/in/edwin-gabriela-evelyn"
                   target="_blank"
                   rel="noreferrer"
-                  className="group flex items-center justify-between border border-cyan-200/15 bg-cyan-200/[0.03] px-4 py-3 text-xs text-cyan-50/80 shadow-[0_0_0_rgba(34,211,238,0)] transition hover:border-cyan-200/50 hover:text-white hover:shadow-[0_0_28px_rgba(34,211,238,0.12)]"
+                  className="group flex min-h-12 items-center justify-between border border-cyan-200/15 bg-cyan-200/[0.03] px-4 py-3 text-sm text-cyan-50/85 transition hover:border-cyan-200/50 hover:text-white hover:shadow-[0_0_28px_rgba(34,211,238,0.12)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
                 >
-                  <span>LinkedIn</span><span className="text-cyan-100/50 transition group-hover:text-cyan-100">↗</span>
-                </a>
-                <a
-                  href="mailto:00gabrielaedwin00@gmail.com"
-                  className="group flex items-center justify-between border border-orange-200/15 bg-orange-200/[0.03] px-4 py-3 text-xs text-orange-50/80 transition hover:border-orange-200/50 hover:text-white hover:shadow-[0_0_28px_rgba(251,146,60,0.12)]"
-                >
-                  <span>Correo electrónico</span><span className="text-orange-100/50 transition group-hover:text-orange-100">↗</span>
+                  <span>LinkedIn · abrir perfil</span><span aria-hidden="true" className="text-cyan-100/50 transition group-hover:text-cyan-100">↗</span>
                 </a>
                 <a
                   href="https://wa.me/?text=Hola%2C%20Gaby.%20Me%20gustar%C3%ADa%20ponerme%20en%20contacto."
                   target="_blank"
                   rel="noreferrer"
-                  className="group flex items-center justify-between border border-emerald-200/15 bg-emerald-200/[0.03] px-4 py-3 text-xs text-emerald-50/80 transition hover:border-emerald-200/50 hover:text-white hover:shadow-[0_0_28px_rgba(52,211,153,0.12)]"
+                  className="group flex min-h-12 items-center justify-between border border-emerald-200/15 bg-emerald-200/[0.03] px-4 py-3 text-sm text-emerald-50/85 transition hover:border-emerald-200/50 hover:text-white hover:shadow-[0_0_28px_rgba(52,211,153,0.12)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-200"
                 >
-                  <span>WhatsApp · elegir contacto</span><span className="text-emerald-100/50 transition group-hover:text-emerald-100">↗</span>
+                  <span>WhatsApp · elegir destinatario</span><span aria-hidden="true" className="text-emerald-100/50 transition group-hover:text-emerald-100">↗</span>
                 </a>
-                <p className="text-[10px] leading-relaxed text-slate-400">
-                  WhatsApp abrirá un mensaje nuevo para que elijas el destinatario.
+                <p className="text-xs leading-relaxed text-slate-300">
+                  El correo abre tu aplicación de email. LinkedIn abrirá el perfil; WhatsApp abrirá un mensaje para que elijas destinatario.
                 </p>
               </div>
             )}

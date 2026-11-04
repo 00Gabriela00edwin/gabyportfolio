@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { motion, useReducedMotion } from 'framer-motion';
+import { Bloom, EffectComposer } from '@react-three/postprocessing';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import gsap from 'gsap';
 import * as THREE from 'three';
-import Butterfly from './Butterfly';
+import ButterflyGuide from './ButterflyGuide';
 import { useAppAudio } from '../audio/AudioContext';
 
 const TERRAIN_WIDTH = 34;
-const TERRAIN_DEPTH = 38;
+const TERRAIN_DEPTH = 50;
 const TERRAIN_SEGMENTS_X = 190;
 const TERRAIN_SEGMENTS_Z = 210;
-const BUTTERFLY_PARTICLE_COUNT = 34;
 const GRASS_TUFT_COUNT = 48000;
 
 function createTerrainMaps() {
@@ -117,13 +117,46 @@ function pathCenter(z) {
 }
 
 function branchTrailCenterX(z) {
-  const progress = THREE.MathUtils.smoothstep(z, -8.5, 2.4);
+  const progress = THREE.MathUtils.smoothstep(z, -10.1, 2.4);
   const start = pathCenter(2.4) - 0.85;
   return THREE.MathUtils.lerp(-8.35, start, progress) + Math.sin(progress * Math.PI) * 0.32;
 }
 
+function cabinTrailCenterX(z) {
+  const progress = THREE.MathUtils.smoothstep(z, -8.4, 2.4);
+  const approach = THREE.MathUtils.lerp(11.1, pathCenter(2.4) + 0.4, progress)
+    + Math.sin(progress * Math.PI) * 0.32;
+  if (z >= -8.4) return approach;
+  if (z < -15.5) {
+    const ascent = THREE.MathUtils.clamp((-z - 15.5) / 8.1, 0, 1);
+    return 12.4 - ascent * 2.3 + Math.sin(ascent * Math.PI * 2) * 0.72;
+  }
+  const forestProgress = THREE.MathUtils.smoothstep(z, -15.5, -8.4);
+  return THREE.MathUtils.lerp(12.4, 11.1, forestProgress)
+    + Math.sin(forestProgress * Math.PI) * 1.28;
+}
+
+const READER_LOCAL_Z = -9.2;
+const READER_POSITION = {
+  x: -9.45,
+  z: READER_LOCAL_Z + 1,
+};
+const RIVERSIDE_TREE_POSITION = { x: -12.1, z: -10.7 };
+const MOUNTAIN_SUMMIT = { x: 10.1, z: -23.2 };
+
+function mountainLiftAt(x, z) {
+  const horizontal = (x - MOUNTAIN_SUMMIT.x) / 6.1;
+  const depth = (z - MOUNTAIN_SUMMIT.z) / 7.4;
+  const ridge = Math.sin(x * 0.62 + z * 0.24) * 0.13
+    + Math.cos(z * 0.78 - x * 0.19) * 0.1;
+  const ridgeMask = Math.exp(-((horizontal * horizontal + depth * depth) * 0.72));
+  return Math.max(0, 5.8 * Math.exp(-((horizontal * horizontal + depth * depth) * 0.78))
+    + ridge * ridgeMask);
+}
+
 function streamCenterZ(x) {
-  return -8.25 + Math.sin((x + 10) * 0.72) * 0.22;
+  return -8.25 + Math.sin((x + 10) * 0.72) * 0.22
+    + Math.sin((x + 10) * 1.6) * 0.08;
 }
 
 function terrainHeight(x, z) {
@@ -131,14 +164,19 @@ function terrainHeight(x, z) {
   const bank = Math.exp(-1 * (((distanceFromPath - 1.85) / 0.7) ** 2)) * 0.78;
   const pathCut = Math.exp(-((distanceFromPath / 1.05) ** 4)) * 0.28;
   const branchDistance = Math.abs(x - branchTrailCenterX(z));
-  const branchGate = THREE.MathUtils.smoothstep(z, -9, -8.2)
+  const branchGate = THREE.MathUtils.smoothstep(z, -10.6, -9.8)
     * (1 - THREE.MathUtils.smoothstep(z, 2.05, 2.7));
   const branchCut = Math.exp(-((branchDistance / 0.9) ** 4)) * branchGate * 0.12;
+  const cabinDistance = Math.abs(x - cabinTrailCenterX(z));
+  const cabinGate = THREE.MathUtils.smoothstep(z, -24.2, -23.4)
+    * (1 - THREE.MathUtils.smoothstep(z, 2.05, 2.7));
+  const cabinCut = Math.exp(-((cabinDistance / 0.9) ** 4)) * cabinGate * 0.12;
   const creekDistance = Math.abs(z - streamCenterZ(x));
+  const mountainLift = mountainLiftAt(x, z);
   const creekGate = THREE.MathUtils.smoothstep(x, -15, -13.5)
     * (1 - THREE.MathUtils.smoothstep(x, -7.7, -5.8));
-  const creekCut = Math.exp(-((creekDistance / 0.48) ** 2)) * creekGate * 0.43;
-  const creekBank = Math.exp(-(((creekDistance - 0.72) / 0.25) ** 2)) * creekGate * 0.17;
+  const creekCut = Math.exp(-((creekDistance / 0.52) ** 2)) * creekGate * 0.5;
+  const creekBank = Math.exp(-(((creekDistance - 0.82) / 0.28) ** 2)) * creekGate * 0.19;
   const furrows = Math.sin(x * 1.85 + z * 0.45 + Math.sin(z * 0.18) * 0.7)
     * Math.cos(z * 1.2 - x * 0.3) * 0.055;
   const rollingGround = Math.sin(x * 0.42 + z * 0.26 + Math.sin(z * 0.13) * 1.1) * 0.22
@@ -146,7 +184,8 @@ function terrainHeight(x, z) {
     + Math.sin(x * 1.2 + z * 0.72) * Math.cos(z * 0.94 - x * 0.36) * 0.11
     + Math.sin(x * 3.7 + z * 2.8) * 0.035;
   const wheelRuts = Math.exp(-(((distanceFromPath - 0.34) / 0.1) ** 2)) * 0.035;
-  return -1.35 - z * 0.023 + bank - pathCut - branchCut - creekCut + creekBank - wheelRuts + furrows + rollingGround;
+  return -1.35 - z * 0.023 + bank - pathCut - branchCut - cabinCut - creekCut
+    + creekBank - wheelRuts + furrows + rollingGround + mountainLift;
 }
 
 function createTerrainGeometry() {
@@ -171,9 +210,13 @@ function createTerrainGeometry() {
         + Math.sin(z * 5.7 - x * 1.9) * 0.055;
       const pathBlend = 1 - THREE.MathUtils.smoothstep(distanceFromPath, 0.78 + edgeBreakup, 1.65 + edgeBreakup);
       const branchDistance = Math.abs(x - branchTrailCenterX(z));
-      const branchGate = THREE.MathUtils.smoothstep(z, -9, -8.2)
+      const branchGate = THREE.MathUtils.smoothstep(z, -10.6, -9.8)
         * (1 - THREE.MathUtils.smoothstep(z, 2.05, 2.7));
       const branchBlend = (1 - THREE.MathUtils.smoothstep(branchDistance, 0.58, 1.02)) * branchGate;
+      const cabinDistance = Math.abs(x - cabinTrailCenterX(z));
+      const cabinGate = THREE.MathUtils.smoothstep(z, -24.2, -23.4)
+        * (1 - THREE.MathUtils.smoothstep(z, 2.05, 2.7));
+      const cabinBlend = (1 - THREE.MathUtils.smoothstep(cabinDistance, 0.58, 1.02)) * cabinGate;
       const creekDistance = Math.abs(z - streamCenterZ(x));
       const creekGate = THREE.MathUtils.smoothstep(x, -15, -13.5)
         * (1 - THREE.MathUtils.smoothstep(x, -7.7, -5.8));
@@ -188,10 +231,19 @@ function createTerrainGeometry() {
         : field.clone().lerp(new THREE.Color('#526744'), -variation * 0.22);
       const pathColor = soil.clone().lerp(drySoil, (variation + 1) * 0.16);
       const branchColor = soil.clone().lerp(new THREE.Color('#783b27'), (variation + 1) * 0.13);
+      const cabinColor = soil.clone().lerp(new THREE.Color('#783b27'), (variation + 1) * 0.13);
       const creekBankColor = new THREE.Color('#654f3d').lerp(field, THREE.MathUtils.clamp((variation + 1) * 0.12, 0, 0.3));
+      const mountainLift = mountainLiftAt(x, z);
+      const mountainBlend = THREE.MathUtils.smoothstep(mountainLift, 1.1, 4.8);
+      const mountainColor = new THREE.Color('#796557').lerp(
+        new THREE.Color('#a78670'),
+        THREE.MathUtils.clamp((variation + 1) * 0.28, 0, 0.56),
+      );
       const color = groundColor
+        .lerp(mountainColor, mountainBlend)
         .lerp(pathColor, pathBlend)
         .lerp(branchColor, branchBlend)
+        .lerp(cabinColor, cabinBlend)
         .lerp(creekBankColor, creekBlend);
 
       positions[index * 3] = x;
@@ -218,27 +270,32 @@ function createTerrainGeometry() {
   return geometry;
 }
 
-function createBranchTrailGeometry() {
+function createTrailGeometry(centerAt, startZ, endZ, width = 1.12) {
   const segments = 160;
   const widthSegments = 8;
+  const reverseWinding = centerAt(endZ) > centerAt(startZ);
   const positions = [];
   const uvs = [];
   const indices = [];
 
   for (let row = 0; row <= segments; row += 1) {
     const progress = row / segments;
-    const z = THREE.MathUtils.lerp(2.4, -8.55, progress);
-    const centerX = branchTrailCenterX(z);
-    const width = 1.12 + Math.sin(progress * Math.PI * 8) * 0.035;
+    const z = THREE.MathUtils.lerp(startZ, endZ, progress);
+    const centerX = centerAt(z);
+    const rowWidth = width + Math.sin(progress * Math.PI * 8) * 0.035;
     for (let column = 0; column <= widthSegments; column += 1) {
       const across = column / widthSegments;
-      const x = centerX + (across - 0.5) * width * 2;
+      const x = centerX + (across - 0.5) * rowWidth * 2;
       positions.push(x, terrainHeight(x, z) + 0.055, z);
       uvs.push(across, progress * 7);
       if (row < segments && column < widthSegments) {
         const current = row * (widthSegments + 1) + column;
         const nextRow = current + widthSegments + 1;
-        indices.push(current, nextRow, current + 1, current + 1, nextRow, nextRow + 1);
+        if (reverseWinding) {
+          indices.push(current, current + 1, nextRow, current + 1, nextRow + 1, nextRow);
+        } else {
+          indices.push(current, nextRow, current + 1, current + 1, nextRow, nextRow + 1);
+        }
       }
     }
   }
@@ -249,6 +306,14 @@ function createBranchTrailGeometry() {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.computeVertexNormals();
   return geometry;
+}
+
+function createBranchTrailGeometry() {
+  return createTrailGeometry(branchTrailCenterX, 2.4, -10.1);
+}
+
+function createCabinTrailGeometry() {
+  return createTrailGeometry(cabinTrailCenterX, 2.4, -23.8, 1.08);
 }
 
 function createCreekGeometry() {
@@ -264,7 +329,9 @@ function createCreekGeometry() {
     const centerZ = streamCenterZ(x);
     for (let column = 0; column <= widthSegments; column += 1) {
       const across = column / widthSegments;
-      const z = centerZ + (across - 0.5) * 0.98;
+      const endTaper = THREE.MathUtils.smoothstep(progress, 0, 0.08)
+        * (1 - THREE.MathUtils.smoothstep(progress, 0.92, 1));
+      const z = centerZ + (across - 0.5) * 1.06 * (0.55 + endTaper * 0.45);
       positions.push(x, terrainHeight(x, z) + 0.205, z);
       uvs.push(progress * 7, across);
       if (row < segments && column < widthSegments) {
@@ -326,14 +393,20 @@ function SkyDome({ reducedMotion }) {
 
       void main() {
         float height = smoothstep(0.03, 0.92, vUv.y);
-        vec3 horizon = vec3(0.98, 0.4, 0.17);
-        vec3 zenith = vec3(0.015, 0.16, 0.48);
-        vec3 sky = mix(horizon, zenith, height);
+        vec3 horizon = vec3(1.0, 0.55, 0.24);
+        vec3 sunsetBand = vec3(0.71, 0.35, 0.43);
+        vec3 zenith = vec3(0.19, 0.22, 0.48);
+        vec3 sky = mix(horizon, sunsetBand, smoothstep(0.02, 0.42, height));
+        sky = mix(sky, zenith, smoothstep(0.38, 0.96, height));
+        float horizonGlow = exp(-pow((vUv.y - 0.16) * 9.0, 2.0));
+        sky += vec3(0.2, 0.055, 0.012) * horizonGlow;
         vec2 cloudUv = vec2(vUv.x * 8.0 + uTime * 0.003, vUv.y * 5.0 + uTime * 0.001);
         float clouds = cloudNoise(cloudUv);
         float cloudMask = smoothstep(0.58, 0.84, clouds) * (1.0 - smoothstep(0.78, 0.98, vUv.y));
-        vec3 cloudColor = mix(vec3(0.78, 0.57, 0.43), vec3(0.98, 0.92, 0.82), vUv.y);
-        gl_FragColor = vec4(mix(sky, cloudColor, cloudMask * 0.62), 1.0);
+        float cloudLight = smoothstep(0.05, 0.4, vUv.y);
+        vec3 cloudColor = mix(vec3(0.93, 0.39, 0.2), vec3(0.94, 0.72, 0.73), cloudLight);
+        cloudColor = mix(cloudColor, vec3(1.0, 0.86, 0.62), horizonGlow * 0.55);
+        gl_FragColor = vec4(mix(sky, cloudColor, cloudMask * 0.72), 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }
@@ -507,14 +580,19 @@ function MeadowGrass({ reducedMotion }) {
       const x = -16.4 + nextRandom() * 32.8;
       const z = -18.2 + nextRandom() * 36.4;
       const mainPathDistance = Math.abs(x - pathCenter(z));
-      const branchActive = z >= -8.5 && z <= 2.7;
+      const branchActive = z >= -10.5 && z <= 2.7;
       const branchDistance = Math.abs(x - branchTrailCenterX(z));
+      const cabinTrailActive = z >= -23.8 && z <= 2.7;
+      const cabinTrailDistance = Math.abs(x - cabinTrailCenterX(z));
       const creekDistance = Math.abs(z - streamCenterZ(x));
+      const mountainLift = mountainLiftAt(x, z);
       const nearCreek = x >= -15 && x <= -5.8;
       if (
         mainPathDistance < 1.72
         || (branchActive && branchDistance < 1.34)
+        || (cabinTrailActive && cabinTrailDistance < 1.34)
         || (nearCreek && creekDistance < 0.95)
+        || mountainLift > 1.15
       ) continue;
 
       const edgeColor = ['#536f43', '#66804a', '#7d8e50', '#98a061'];
@@ -681,15 +759,17 @@ function Forest() {
         + (nextRandom() - 0.5) * 0.34;
       const side = index % 2 === 0 ? -1 : 1;
       let x = pathCenter(z) + side * (4.5 + lane * 1.9 + nextRandom() * 1.2);
-      const branchActive = z >= -8.5 && z <= 2.7;
-      if (branchActive && side < 0 && Math.abs(x - branchTrailCenterX(z)) < 3.2) {
-        x = branchTrailCenterX(z) - 3.2 - nextRandom() * 1.4;
-      }
+      const branchActive = z >= -10.5 && z <= 2.7;
       const nearCreek = x >= -15 && x <= -5.8 && Math.abs(z - streamCenterZ(x)) < 1.7;
       if (nearCreek) {
         x = Math.min(-5.4, x + (side < 0 ? -2.4 : 2.4));
       }
-      if (x > 7 && Math.abs(z + 3.8) < 5.2) continue;
+      if (Math.abs(x - pathCenter(z)) < 3.2) continue;
+      if (branchActive && Math.abs(x - branchTrailCenterX(z)) < 3.2) continue;
+      if (Math.hypot(x - READER_POSITION.x, z - (READER_POSITION.z - 1)) < 9.5) continue;
+      if (mountainLiftAt(x, z) > 1.4) continue;
+      if (x > 7 && Math.abs(z + 8.4) < 5.2) continue;
+      if (z >= -23.8 && z <= 2.7 && Math.abs(x - cabinTrailCenterX(z)) < 3.2) continue;
       const height = type === 2 ? 0.55 + nextRandom() * 0.55 : 2.5 + nextRandom() * 2.8;
       const treeScale = 0.82 + nextRandom() * 0.42;
       const crownScale = type === 0
@@ -898,20 +978,45 @@ function Wildflowers({ reducedMotion }) {
     const nextRandom = createRandom(54109);
     const blooms = [];
     let attempts = 0;
-    while (blooms.length < 720 && attempts < 4000) {
+    while (blooms.length < 860 && attempts < 4000) {
       attempts += 1;
-      const x = -16 + nextRandom() * 32;
-      const z = -18 + nextRandom() * 36;
+      let x;
+      let z;
+      if (attempts <= 300) {
+        z = -17 + nextRandom() * 34;
+        const side = nextRandom() < 0.5 ? -1 : 1;
+        x = pathCenter(z) + side * (1.28 + nextRandom() * 0.76);
+      } else if (attempts <= 450) {
+        z = 2.35 - nextRandom() * 12.45;
+        const side = nextRandom() < 0.5 ? -1 : 1;
+        x = branchTrailCenterX(z) + side * (1.24 + nextRandom() * 0.7);
+      } else if (attempts <= 600) {
+        z = 2.35 - nextRandom() * 4.45;
+        const side = nextRandom() < 0.5 ? -1 : 1;
+        x = cabinTrailCenterX(z) + side * (1.22 + nextRandom() * 0.7);
+      } else if (attempts <= 760) {
+        z = -2.4 - nextRandom() * 12.4;
+        const side = nextRandom() < 0.5 ? -1 : 1;
+        x = cabinTrailCenterX(z) + side * (1.24 + nextRandom() * 0.7);
+      } else {
+        x = -16 + nextRandom() * 32;
+        z = -18 + nextRandom() * 36;
+      }
       const mainDistance = Math.abs(x - pathCenter(z));
       const branchDistance = Math.abs(x - branchTrailCenterX(z));
+      const cabinDistance = Math.abs(x - cabinTrailCenterX(z));
       const creekDistance = Math.abs(z - streamCenterZ(x));
-      const branchActive = z >= -8.5 && z <= 2.7;
+      const mountainLift = mountainLiftAt(x, z);
+      const branchActive = z >= -10.5 && z <= 2.7;
+      const cabinTrailActive = z >= -23.8 && z <= 2.7;
       if (
-        mainDistance < 1.8
-        || (branchActive && branchDistance < 1.42)
+        mainDistance < 1.2
+        || (branchActive && branchDistance < 1.2)
+        || (cabinTrailActive && cabinDistance < 1.2)
         || (x >= -15 && x <= -5.8 && creekDistance < 1.1)
+        || mountainLift > 1.2
       ) continue;
-      const colors = ['#fffaf0', '#f9f4df', '#fffdf5', '#fff7e8'];
+      const colors = ['#fffaf0', '#f9f4df', '#fffdf5', '#fff7e8', '#e7a5a0', '#e9c56f', '#b9addd'];
       blooms.push({
         x,
         y: terrainHeight(x, z),
@@ -1026,11 +1131,20 @@ function PathStones() {
     const colors = ['#713d31', '#95543b', '#a56c50', '#6d6258', '#887b6c', '#b17a56'];
 
     for (let index = 0; index < 320; index += 1) {
-      const alongBranch = index % 4 === 0;
-      const z = alongBranch ? 2.1 - nextRandom() * 10.3 : 13 - nextRandom() * 29;
+      const alongCabinTrail = index % 5 === 0 || index % 5 === 3;
+      const alongBranch = index % 5 === 1;
+      const z = alongCabinTrail
+        ? 2.1 - nextRandom() * 24.7
+        : alongBranch
+          ? 2.1 - nextRandom() * 10.3
+          : 13 - nextRandom() * 29;
       const side = nextRandom() < 0.5 ? -1 : 1;
-      const center = alongBranch ? branchTrailCenterX(z) : pathCenter(z);
-      const offset = alongBranch
+      const center = alongCabinTrail
+        ? cabinTrailCenterX(z)
+        : alongBranch
+          ? branchTrailCenterX(z)
+          : pathCenter(z);
+      const offset = alongBranch || alongCabinTrail
         ? 0.58 + nextRandom() * 0.95
         : 1.02 + nextRandom() * 2.1;
       const x = center + side * offset;
@@ -1114,8 +1228,8 @@ function AtmosphericClouds({ reducedMotion }) {
     });
   }), []);
   const cloudMaterials = useMemo(() => [
-    new THREE.MeshBasicMaterial({ color: '#f0d5be', transparent: true, opacity: 0.13, depthWrite: false }),
-    new THREE.MeshBasicMaterial({ color: '#d9e5e5', transparent: true, opacity: 0.09, depthWrite: false }),
+    new THREE.MeshBasicMaterial({ color: '#f9b887', transparent: true, opacity: 0.18, depthWrite: false }),
+    new THREE.MeshBasicMaterial({ color: '#d8a2b3', transparent: true, opacity: 0.14, depthWrite: false }),
   ], []);
   const cloudMatrices = useMemo(() => ({
     position: new THREE.Vector3(),
@@ -1158,38 +1272,163 @@ function AtmosphericClouds({ reducedMotion }) {
   ));
 }
 
+function SkyBird({ reducedMotion }) {
+  const bird = useRef(null);
+  const leftWing = useRef(null);
+  const rightWing = useRef(null);
+  const wingGeometry = useMemo(() => {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.quadraticCurveTo(0.42, 0.1, 1.24, 0.36);
+    shape.quadraticCurveTo(1.05, 0.12, 1.38, -0.24);
+    shape.quadraticCurveTo(0.77, -0.05, 0.18, -0.1);
+    shape.closePath();
+    return new THREE.ShapeGeometry(shape, 5);
+  }, []);
+  const bodyGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.28, 1), []);
+  const featherMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#302d3b',
+    roughness: 0.78,
+    flatShading: true,
+    side: THREE.DoubleSide,
+  }), []);
+  const breastMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#b57c62',
+    roughness: 0.8,
+    flatShading: true,
+  }), []);
+  const beakMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#d3a26b',
+    roughness: 0.78,
+    flatShading: true,
+  }), []);
+  const eyeMaterial = useMemo(() => new THREE.MeshBasicMaterial({ color: '#f1d8a4' }), []);
+
+  useFrame(({ clock }) => {
+    if (!bird.current) return;
+    const time = clock.elapsedTime;
+    const across = reducedMotion ? 0 : Math.sin(time * 0.14) * 31;
+    const velocity = Math.cos(time * 0.14);
+    bird.current.position.set(across, 11.6 + (reducedMotion ? 0 : Math.sin(time * 0.62) * 0.55), -16.5);
+    bird.current.rotation.y = velocity >= 0 ? -Math.PI / 2 : Math.PI / 2;
+    bird.current.rotation.z = reducedMotion ? 0 : Math.sin(time * 0.14) * 0.035;
+    if (!reducedMotion) {
+      const flap = Math.sin(time * 4.1) * 0.34;
+      if (leftWing.current) leftWing.current.rotation.z = flap;
+      if (rightWing.current) rightWing.current.rotation.z = -flap;
+    }
+  });
+
+  useEffect(() => () => {
+    wingGeometry.dispose();
+    bodyGeometry.dispose();
+    featherMaterial.dispose();
+    breastMaterial.dispose();
+    beakMaterial.dispose();
+    eyeMaterial.dispose();
+  }, [beakMaterial, bodyGeometry, breastMaterial, eyeMaterial, featherMaterial, wingGeometry]);
+
+  return (
+    <group ref={bird} scale={1.45}>
+      <mesh geometry={bodyGeometry} scale={[0.48, 0.42, 1.5]} material={featherMaterial} castShadow />
+      <mesh position={[0, 0.025, -0.35]} scale={[0.34, 0.34, 0.85]} material={breastMaterial}>
+        <sphereGeometry args={[0.22, 10, 7]} />
+      </mesh>
+      <mesh position={[0, 0.035, -0.72]} scale={0.46} material={featherMaterial}>
+        <sphereGeometry args={[0.2, 10, 8]} />
+      </mesh>
+      <mesh position={[0, 0.04, -0.88]} rotation={[-Math.PI / 2, 0, 0]} material={beakMaterial}>
+        <coneGeometry args={[0.07, 0.2, 5]} />
+      </mesh>
+      <mesh position={[-0.09, 0.1, -0.81]} material={eyeMaterial}>
+        <sphereGeometry args={[0.025, 6, 5]} />
+      </mesh>
+      <mesh position={[0.09, 0.1, -0.81]} material={eyeMaterial}>
+        <sphereGeometry args={[0.025, 6, 5]} />
+      </mesh>
+      <group ref={leftWing} position={[-0.12, 0.07, -0.08]} scale={[-1, 1, 1]}>
+        <mesh geometry={wingGeometry} material={featherMaterial} castShadow />
+      </group>
+      <group ref={rightWing} position={[0.12, 0.07, -0.08]}>
+        <mesh geometry={wingGeometry} material={featherMaterial} castShadow />
+      </group>
+      {[-0.12, 0, 0.12].map((x) => (
+        <mesh key={x} position={[x, 0, 0.42]} rotation={[Math.PI / 2, 0, x * 1.5]} scale={[0.65, 1, 1]} material={featherMaterial}>
+          <coneGeometry args={[0.09, 0.42, 5]} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 function CreekWater({ reducedMotion }) {
   const geometry = useMemo(() => createCreekGeometry(), []);
   const waterRef = useRef(null);
-  const material = useMemo(() => new THREE.MeshPhysicalMaterial({
-    color: '#91d2d1',
-    emissive: '#174d5a',
-    emissiveIntensity: 0.12,
-    roughness: 0.2,
-    metalness: 0.04,
-    clearcoat: 0.82,
-    clearcoatRoughness: 0.16,
+  const material = useMemo(() => new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uMotion: { value: 1 },
+    },
     transparent: true,
-    opacity: 0.82,
     depthWrite: false,
     side: THREE.DoubleSide,
+    vertexShader: `
+      uniform float uTime;
+      uniform float uMotion;
+      varying vec2 vUv;
+      varying vec3 vViewPosition;
+      varying vec3 vViewNormal;
+
+      void main() {
+        vUv = uv;
+        vec3 displaced = position;
+        displaced.y += (
+          sin(position.x * 1.8 + position.z * 1.1 + uTime * 1.4) * 0.018
+          + sin(position.x * 3.1 - position.z * 2.0 + uTime * 0.8) * 0.008
+        ) * uMotion;
+        vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
+        vViewPosition = -mvPosition.xyz;
+        vViewNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      varying vec2 vUv;
+      varying vec3 vViewPosition;
+      varying vec3 vViewNormal;
+
+      void main() {
+        float currentTime = uTime;
+        float flow = sin(vUv.x * 38.0 - currentTime * 2.4 + sin(vUv.y * 11.0) * 0.9);
+        float glint = pow(max(flow, 0.0), 16.0);
+        float reflectedLeaves = smoothstep(
+          0.72,
+          0.98,
+          sin(vUv.x * 17.0 + vUv.y * 6.0 + sin(vUv.x * 9.0) * 0.65)
+        );
+        float fresnel = pow(
+          1.0 - max(dot(normalize(vViewNormal), normalize(vViewPosition)), 0.0),
+          2.0
+        );
+        vec3 deepWater = vec3(0.13, 0.39, 0.46);
+        vec3 skyReflection = vec3(0.53, 0.76, 0.78);
+        vec3 foliageReflection = vec3(0.34, 0.51, 0.39);
+        vec3 color = mix(deepWater, skyReflection, vUv.y * 0.34 + fresnel * 0.24);
+        color = mix(color, foliageReflection, reflectedLeaves * 0.19);
+        color += vec3(0.48, 0.66, 0.61) * glint * 0.3;
+        gl_FragColor = vec4(color, 0.88);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }
+    `,
   }), []);
-  const basePositions = useMemo(() => geometry.attributes.position.array.slice(), [geometry]);
 
   useFrame(({ clock }) => {
-    const waterGeometry = waterRef.current?.geometry;
-    if (reducedMotion || !waterGeometry) return;
-    const positions = waterGeometry.attributes.position.array;
-    const time = clock.elapsedTime;
-    for (let index = 0; index < positions.length; index += 3) {
-      const x = basePositions[index];
-      const z = basePositions[index + 2];
-      positions[index + 1] = basePositions[index + 1]
-        + Math.sin(x * 2.2 + time * 1.25 + z * 1.6) * 0.018
-        + Math.sin(x * 4.1 - time * 0.78) * 0.009;
-    }
-    waterGeometry.attributes.position.needsUpdate = true;
-    waterGeometry.computeVertexNormals();
+    const activeUniforms = waterRef.current?.material?.uniforms;
+    if (!activeUniforms) return;
+    activeUniforms.uTime.value = reducedMotion ? 0 : clock.elapsedTime;
+    activeUniforms.uMotion.value = reducedMotion ? 0 : 1;
   });
 
   useEffect(() => () => {
@@ -1202,85 +1441,81 @@ function CreekWater({ reducedMotion }) {
   );
 }
 
-function Waterfall({ reducedMotion }) {
-  const sheetRef = useRef(null);
-  const waterfallX = -6.7;
-  const geometry = useMemo(() => new THREE.PlaneGeometry(3.2, 1.05, 20, 20), []);
-  const fallBase = terrainHeight(waterfallX, streamCenterZ(waterfallX)) + 0.2;
-  const material = useMemo(() => new THREE.MeshPhysicalMaterial({
-    color: '#b8eced',
-    emissive: '#4b9ba2',
-    emissiveIntensity: 0.2,
-    roughness: 0.16,
-    metalness: 0.02,
-    clearcoat: 0.9,
-    transparent: true,
-    opacity: 0.76,
-    depthWrite: false,
-    side: THREE.DoubleSide,
+function CreeksideTree({ reducedMotion }) {
+  const canopy = useRef(null);
+  const materials = useMemo(() => ({
+    bark: new THREE.MeshStandardMaterial({ color: '#60432f', roughness: 0.96, flatShading: true }),
+    deepLeaves: new THREE.MeshStandardMaterial({ color: '#466446', roughness: 0.92, flatShading: true }),
+    leaves: new THREE.MeshStandardMaterial({ color: '#65804f', roughness: 0.9, flatShading: true }),
+    lightLeaves: new THREE.MeshStandardMaterial({ color: '#809261', roughness: 0.92, flatShading: true }),
   }), []);
-  const basePositions = useMemo(() => geometry.attributes.position.array.slice(), [geometry]);
-  const foamPositions = useMemo(() => {
-    const values = new Float32Array(48 * 3);
-    for (let index = 0; index < 48; index += 1) {
-      values[index * 3] = Math.sin(index * 12.9898) * 0.8;
-      values[index * 3 + 1] = -0.34 + (index % 8) * 0.025;
-      values[index * 3 + 2] = 0.01 + Math.cos(index * 7.1) * 0.025;
-    }
-    return values;
-  }, []);
-  const foamRef = useRef(null);
+  const y = terrainHeight(RIVERSIDE_TREE_POSITION.x, RIVERSIDE_TREE_POSITION.z);
 
   useFrame(({ clock }) => {
-    if (reducedMotion) return;
-    const sheetGeometry = sheetRef.current?.geometry;
-    if (sheetGeometry) {
-      const positions = sheetGeometry.attributes.position.array;
-      const time = clock.elapsedTime;
-      for (let index = 0; index < positions.length; index += 3) {
-        const x = basePositions[index];
-        const y = basePositions[index + 1];
-        positions[index + 2] = basePositions[index + 2]
-          + Math.sin(y * 12 - time * 3 + x * 2) * 0.025
-          + Math.sin(x * 9 + time * 1.8) * 0.012;
-      }
-      sheetGeometry.attributes.position.needsUpdate = true;
-      sheetGeometry.computeVertexNormals();
-    }
-    if (foamRef.current) {
-      foamRef.current.position.y = fallBase + 0.04 + Math.sin(clock.elapsedTime * 2.4) * 0.025;
-      foamRef.current.material.opacity = 0.42 + Math.sin(clock.elapsedTime * 3.2) * 0.1;
-    }
+    if (!canopy.current) return;
+    canopy.current.rotation.z = reducedMotion ? 0 : Math.sin(clock.elapsedTime * 0.48) * 0.018;
   });
 
   useEffect(() => () => {
-    geometry.dispose();
-    material.dispose();
-  }, [geometry, material]);
+    Object.values(materials).forEach((material) => material.dispose());
+  }, [materials]);
 
   return (
-    <group position={[waterfallX, 0, -8.15]}>
-      <mesh ref={sheetRef} geometry={geometry} material={material} position={[0, fallBase + 0.525, 0]} />
-      <points ref={foamRef} position={[0, fallBase + 0.04, 0.025]}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[foamPositions, 3]} />
-        </bufferGeometry>
-        <pointsMaterial
-          color="#efffff"
-          size={0.055}
-          sizeAttenuation
-          transparent
-          opacity={0.48}
-          depthWrite={false}
-        />
-      </points>
+    <group position={[RIVERSIDE_TREE_POSITION.x, y, RIVERSIDE_TREE_POSITION.z]}>
+      <mesh position={[0, 1.24, 0]} material={materials.bark} castShadow receiveShadow>
+        <cylinderGeometry args={[0.24, 0.36, 2.5, 7]} />
+      </mesh>
+      <group ref={canopy} position={[0, 2.85, 0]}>
+        <mesh position={[0, 0.18, 0]} scale={[1.3, 1.04, 1.2]} material={materials.deepLeaves} castShadow receiveShadow>
+          <icosahedronGeometry args={[1, 1]} />
+        </mesh>
+        <mesh position={[-0.74, -0.12, 0.08]} scale={[0.82, 0.74, 0.85]} material={materials.leaves} castShadow receiveShadow>
+          <icosahedronGeometry args={[1, 1]} />
+        </mesh>
+        <mesh position={[0.7, -0.06, -0.12]} scale={[0.82, 0.76, 0.84]} material={materials.lightLeaves} castShadow receiveShadow>
+          <icosahedronGeometry args={[1, 1]} />
+        </mesh>
+      </group>
     </group>
   );
 }
 
-function LogCabin({ reducedMotion }) {
+function MountainRocks() {
+  const geometry = useMemo(() => new THREE.IcosahedronGeometry(1, 1), []);
+  const materials = useMemo(() => [
+    new THREE.MeshStandardMaterial({ color: '#706257', roughness: 0.97, flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: '#8a7565', roughness: 0.95, flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: '#594e48', roughness: 0.98, flatShading: true }),
+  ], []);
+  const formations = useMemo(() => [
+    { x: 5.7, z: -25.2, scale: [1.05, 1.35, 1.05], rotation: [0.08, 0.4, -0.12], material: 0 },
+    { x: 15.2, z: -21.8, scale: [1.25, 1.65, 1.15], rotation: [-0.1, -0.6, 0.16], material: 2 },
+    { x: 13.5, z: -25.8, scale: [1.25, 1.45, 1.1], rotation: [0.15, 0.8, 0.08], material: 1 },
+    { x: 6.6, z: -27.1, scale: [0.95, 1.2, 0.9], rotation: [-0.08, -0.2, -0.14], material: 2 },
+  ], []);
+
+  useEffect(() => () => {
+    geometry.dispose();
+    materials.forEach((material) => material.dispose());
+  }, [geometry, materials]);
+
+  return formations.map((rock, index) => (
+    <mesh
+      key={index}
+      geometry={geometry}
+      material={materials[rock.material]}
+      position={[rock.x, terrainHeight(rock.x, rock.z) + rock.scale[1] * 0.38, rock.z]}
+      scale={rock.scale}
+      rotation={rock.rotation}
+      castShadow
+      receiveShadow
+    />
+  ));
+}
+
+function LogCabin({ reducedMotion, dogActive }) {
   const cabinX = 11.1;
-  const cabinZ = -3.8;
+  const cabinZ = -8.4;
   const cabinY = terrainHeight(cabinX, cabinZ);
   const logGeometry = useMemo(() => new THREE.CylinderGeometry(0.16, 0.16, 1, 8), []);
   const woodMaterial = useMemo(() => new THREE.MeshStandardMaterial({
@@ -1297,6 +1532,29 @@ function LogCabin({ reducedMotion }) {
     roughness: 0.98,
     flatShading: true,
   }), []);
+  const porchMaterials = useMemo(() => ({
+    wood: new THREE.MeshStandardMaterial({ color: '#795337', roughness: 0.93, flatShading: true }),
+    woodLight: new THREE.MeshStandardMaterial({ color: '#a77a4f', roughness: 0.9 }),
+    ceramic: new THREE.MeshStandardMaterial({ color: '#d8b27e', roughness: 0.42, metalness: 0.04 }),
+    ceramicBlue: new THREE.MeshStandardMaterial({ color: '#739e9d', roughness: 0.38, metalness: 0.04 }),
+    leaves: new THREE.MeshStandardMaterial({ color: '#577c4b', roughness: 0.88, flatShading: true }),
+    leafLight: new THREE.MeshStandardMaterial({ color: '#82945a', roughness: 0.9, flatShading: true }),
+    book: new THREE.MeshStandardMaterial({ color: '#8b5140', roughness: 0.86 }),
+    bookGreen: new THREE.MeshStandardMaterial({ color: '#526b58', roughness: 0.88 }),
+    brass: new THREE.MeshStandardMaterial({ color: '#c19b5c', metalness: 0.62, roughness: 0.36 }),
+  }), []);
+  const vineCurves = useMemo(() => [-1.62, 1.65].map((x, index) => {
+    const points = Array.from({ length: 7 }, (_, point) => new THREE.Vector3(
+      x + Math.sin(point * 1.3 + index) * 0.13,
+      0.48 + point * 0.37,
+      1.91 + Math.cos(point * 1.1 + index) * 0.04,
+    ));
+    return new THREE.CatmullRomCurve3(points);
+  }), []);
+  const vineGeometries = useMemo(() => vineCurves.map((curve) => (
+    new THREE.TubeGeometry(curve, 32, 0.026, 5, false)
+  )), [vineCurves]);
+  const decorLeafGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.1, 0), []);
   const logs = useMemo(() => {
     const rows = [];
     const wallRows = 7;
@@ -1318,6 +1576,12 @@ function LogCabin({ reducedMotion }) {
   const beetleWalk = useRef(null);
   const beetleShell = useRef(null);
   const beetleLegs = useRef([]);
+  const door = useRef(null);
+  const dog = useRef(null);
+  const dogTail = useRef(null);
+  const dogLegs = useRef([]);
+  const dogProgress = useRef(0);
+  const [doorManuallyOpen, setDoorManuallyOpen] = useState(false);
   const beetleMaterials = useMemo(() => ({
     shell: new THREE.MeshPhysicalMaterial({
       color: '#456d55',
@@ -1341,6 +1605,13 @@ function LogCabin({ reducedMotion }) {
       roughness: 0.86,
       flatShading: true,
     }),
+  }), []);
+  const dogMaterials = useMemo(() => ({
+    coat: new THREE.MeshStandardMaterial({ color: '#b98353', roughness: 0.88, flatShading: true }),
+    muzzle: new THREE.MeshStandardMaterial({ color: '#e1c49a', roughness: 0.9, flatShading: true }),
+    ears: new THREE.MeshStandardMaterial({ color: '#724936', roughness: 0.9, flatShading: true }),
+    nose: new THREE.MeshStandardMaterial({ color: '#392c29', roughness: 0.5 }),
+    eyes: new THREE.MeshBasicMaterial({ color: '#241e1b' }),
   }), []);
 
   useFrame(({ clock }, delta) => {
@@ -1369,13 +1640,49 @@ function LogCabin({ reducedMotion }) {
     }
   });
 
+  useFrame(({ clock }, delta) => {
+    const time = clock.elapsedTime;
+    const targetAngle = dogActive || doorManuallyOpen ? -1.12 : 0;
+    if (door.current) {
+      door.current.rotation.y = THREE.MathUtils.damp(door.current.rotation.y, targetAngle, 3.5, delta);
+    }
+
+    const targetProgress = dogActive ? 1 : 0;
+    dogProgress.current = THREE.MathUtils.damp(
+      dogProgress.current,
+      targetProgress,
+      dogActive ? 0.95 : 0.4,
+      delta,
+    );
+    if (!dog.current) return;
+    const progress = dogProgress.current;
+    const dogZ = cabinZ + 1.55 + progress * 2.45;
+    dog.current.visible = progress > 0.015;
+    dog.current.position.set(
+      cabinX + Math.sin(progress * Math.PI) * 0.42,
+      terrainHeight(cabinX, dogZ) + 0.05 + (reducedMotion ? 0 : Math.abs(Math.sin(time * 8)) * 0.035),
+      dogZ,
+    );
+    dog.current.rotation.y = Math.sin(progress * Math.PI) * 0.16;
+    if (!reducedMotion) {
+      dogLegs.current.forEach((leg, index) => {
+        if (leg) leg.rotation.x = Math.sin(time * 9 + (index % 2) * Math.PI) * 0.28 * progress;
+      });
+      if (dogTail.current) dogTail.current.rotation.x = Math.sin(time * 9) * 0.52;
+    }
+  });
+
   useEffect(() => () => {
     logGeometry.dispose();
     Object.values(beetleMaterials).forEach((material) => material.dispose());
+    Object.values(dogMaterials).forEach((material) => material.dispose());
     woodMaterial.dispose();
     darkWoodMaterial.dispose();
     roofMaterial.dispose();
-  }, [beetleMaterials, darkWoodMaterial, logGeometry, roofMaterial, woodMaterial]);
+    Object.values(porchMaterials).forEach((material) => material.dispose());
+    vineGeometries.forEach((geometry) => geometry.dispose());
+    decorLeafGeometry.dispose();
+  }, [beetleMaterials, decorLeafGeometry, darkWoodMaterial, dogMaterials, logGeometry, porchMaterials, roofMaterial, vineGeometries, woodMaterial]);
 
   return (
     <group>
@@ -1392,10 +1699,33 @@ function LogCabin({ reducedMotion }) {
             receiveShadow
           />
         ))}
-        <mesh position={[0, 1.06, 1.73]} castShadow>
-          <boxGeometry args={[0.82, 1.8, 0.08]} />
-          <meshStandardMaterial color="#38251a" roughness={0.9} />
-        </mesh>
+        <group ref={door} position={[-0.41, 0.16, 1.78]}>
+          <group
+            onClick={(event) => {
+              event.stopPropagation();
+              setDoorManuallyOpen((open) => !open);
+            }}
+          >
+            <mesh position={[0.41, 0.9, 0]} castShadow receiveShadow>
+              <boxGeometry args={[0.82, 1.8, 0.08]} />
+              <meshStandardMaterial color="#38251a" roughness={0.9} />
+            </mesh>
+            {[-0.2, 0, 0.2].map((x) => (
+              <mesh key={x} position={[0.41 + x, 0.9, -0.045]}>
+                <boxGeometry args={[0.025, 1.68, 0.012]} />
+                <primitive object={darkWoodMaterial} attach="material" />
+              </mesh>
+            ))}
+            <mesh position={[0.71, 0.9, -0.07]}>
+              <sphereGeometry args={[0.045, 10, 8]} />
+              <meshStandardMaterial color="#c4a164" metalness={0.76} roughness={0.32} />
+            </mesh>
+            <mesh position={[0.73, 0.9, -0.065]} rotation={[Math.PI / 2, 0, 0]}>
+              <torusGeometry args={[0.075, 0.018, 6, 14]} />
+              <meshStandardMaterial color="#b99659" metalness={0.78} roughness={0.3} />
+            </mesh>
+          </group>
+        </group>
         <mesh position={[0, 2.15, 1.79]}>
           <boxGeometry args={[0.92, 0.12, 0.1]} />
           <meshStandardMaterial color="#b88954" roughness={0.8} />
@@ -1413,6 +1743,177 @@ function LogCabin({ reducedMotion }) {
         <mesh position={[1.85, 3.3, -0.95]} material={darkWoodMaterial}>
           <cylinderGeometry args={[0.18, 0.22, 1.35, 7]} />
         </mesh>
+        <group position={[0, 0.08, 2.45]}>
+          {Array.from({ length: 7 }, (_, index) => (
+            <mesh
+              key={index}
+              position={[-2.25 + index * 0.72, 0, 0]}
+              material={porchMaterials.wood}
+              receiveShadow
+            >
+              <boxGeometry args={[0.68, 0.13, 1.55]} />
+            </mesh>
+          ))}
+          {[-1.95, 1.95].map((x) => [-0.28, 1.08].map((z) => (
+            <mesh key={`${x}-${z}`} position={[x, 0.5, z]} material={porchMaterials.wood} castShadow>
+              <boxGeometry args={[0.14, 0.94, 0.14]} />
+            </mesh>
+          )))}
+        </group>
+        <group position={[1.12, 0.86, 2.7]}>
+          <mesh material={porchMaterials.wood} castShadow>
+            <boxGeometry args={[0.78, 0.1, 0.62]} />
+          </mesh>
+          {[-0.29, 0.29].map((x) => [-0.22, 0.22].map((z) => (
+            <mesh key={`${x}-${z}`} position={[x, -0.36, z]} material={porchMaterials.wood} castShadow>
+              <cylinderGeometry args={[0.035, 0.045, 0.68, 6]} />
+            </mesh>
+          )))}
+          <group position={[-0.08, 0.15, 0]}>
+            <mesh scale={[0.13, 0.11, 0.13]} material={porchMaterials.ceramic} castShadow>
+              <sphereGeometry args={[1, 12, 9]} />
+            </mesh>
+            <mesh position={[0, 0.1, 0]} material={porchMaterials.ceramic} castShadow>
+              <cylinderGeometry args={[0.07, 0.09, 0.08, 10]} />
+            </mesh>
+            <mesh position={[0, 0.16, 0]} material={porchMaterials.brass}>
+              <sphereGeometry args={[0.026, 8, 6]} />
+            </mesh>
+            <mesh position={[0.14, 0.02, 0]} rotation={[0, 0, -Math.PI / 2]} material={porchMaterials.ceramic}>
+              <torusGeometry args={[0.067, 0.018, 6, 12, Math.PI * 1.55]} />
+            </mesh>
+            <mesh position={[-0.16, 0.03, 0]} rotation={[0, 0, -Math.PI / 2]} material={porchMaterials.ceramic}>
+              <coneGeometry args={[0.065, 0.2, 8]} />
+            </mesh>
+          </group>
+          <mesh position={[0.26, 0.11, 0.08]} material={porchMaterials.ceramicBlue} castShadow>
+            <cylinderGeometry args={[0.065, 0.075, 0.16, 9]} />
+          </mesh>
+          <mesh position={[0.26, 0.2, 0.08]} material={porchMaterials.ceramicBlue}>
+            <torusGeometry args={[0.052, 0.012, 6, 12]} />
+          </mesh>
+        </group>
+        <group position={[1.42, 0, 1.91]}>
+          {[1.23, 1.9].map((y) => (
+            <mesh key={y} position={[0, y, 0]} material={porchMaterials.woodLight} castShadow>
+              <boxGeometry args={[0.72, 0.09, 0.2]} />
+            </mesh>
+          ))}
+          <mesh position={[-0.18, 1.42, -0.01]} scale={[0.16, 0.18, 0.13]} material={porchMaterials.ceramicBlue} castShadow>
+            <sphereGeometry args={[1, 9, 7]} />
+          </mesh>
+          <mesh position={[-0.18, 1.62, -0.01]} material={porchMaterials.leaves}>
+            <cylinderGeometry args={[0.09, 0.11, 0.08, 8]} />
+          </mesh>
+          {[-0.28, -0.12, 0.05].map((x, index) => (
+            <mesh key={x} position={[x, 1.82 + (index % 2) * 0.08, 0]} rotation={[0, 0, (index - 1) * 0.28]} material={porchMaterials.leaves}>
+              <coneGeometry args={[0.07, 0.32, 5]} />
+            </mesh>
+          ))}
+          {[0.08, 0.23, 0.39].map((x, index) => (
+            <group key={x} position={[x, 1.32, -0.02]} rotation={[0, 0, index % 2 ? 0.06 : -0.08]}>
+              <mesh position={[0, 0.09, 0]} material={index === 1 ? porchMaterials.bookGreen : porchMaterials.book} castShadow>
+                <boxGeometry args={[0.12, 0.28 + index * 0.035, 0.08]} />
+              </mesh>
+              <mesh position={[0, 0.09, 0.044]} material={porchMaterials.brass}>
+                <boxGeometry args={[0.014, 0.12, 0.006]} />
+              </mesh>
+            </group>
+          ))}
+          <mesh position={[0.05, 2.04, 0]} material={porchMaterials.ceramic} castShadow>
+            <cylinderGeometry args={[0.1, 0.13, 0.2, 8]} />
+          </mesh>
+          <mesh position={[0.05, 2.18, 0]} material={porchMaterials.leafLight}>
+            <cylinderGeometry args={[0.11, 0.09, 0.08, 8]} />
+          </mesh>
+        </group>
+        <group position={[-1.42, 0, 2.52]} rotation={[0.28, -0.2, 0]}>
+          {[[-0.28, -0.2], [0.28, -0.2], [0, 0.35]].map(([x, z]) => (
+            <mesh key={`${x}-${z}`} position={[x, 0.54, z]} rotation={[0, 0, x * 0.45]} material={porchMaterials.wood} castShadow>
+              <cylinderGeometry args={[0.025, 0.035, 1.12, 6]} />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.82, 0]} rotation={[0.32, 0, -0.12]} material={porchMaterials.brass} castShadow>
+            <cylinderGeometry args={[0.07, 0.085, 0.62, 8]} />
+          </mesh>
+          <mesh position={[0, 0.82, 0.32]} rotation={[Math.PI / 2, 0, 0]} material={porchMaterials.brass}>
+            <torusGeometry args={[0.078, 0.018, 6, 12]} />
+          </mesh>
+          <mesh position={[0, 0.82, 0.36]} rotation={[Math.PI / 2, 0, 0]} material={porchMaterials.ceramicBlue}>
+            <circleGeometry args={[0.057, 10]} />
+          </mesh>
+          <mesh position={[0, 1.14, 0]} rotation={[0.32, 0, -0.12]} material={porchMaterials.woodLight}>
+            <cylinderGeometry args={[0.028, 0.035, 0.12, 6]} />
+          </mesh>
+        </group>
+        {vineGeometries.map((geometry, index) => (
+          <group key={index}>
+            <mesh geometry={geometry} material={porchMaterials.leaves} />
+            {Array.from({ length: 8 }, (_, leaf) => {
+              const t = 0.12 + leaf * 0.105;
+              const point = vineCurves[index].getPoint(t);
+              return (
+                <mesh
+                  key={leaf}
+                  geometry={decorLeafGeometry}
+                  material={leaf % 2 ? porchMaterials.leafLight : porchMaterials.leaves}
+                  position={[point.x + (leaf % 2 ? 0.12 : -0.12), point.y, point.z]}
+                  scale={[0.75, 0.35, 1.25]}
+                  rotation={[0, 0, leaf % 2 ? 0.55 : -0.55]}
+                  castShadow
+                />
+              );
+            })}
+          </group>
+        ))}
+      </group>
+      <group ref={dog} visible={false}>
+        <mesh position={[0, 0.46, 0]} scale={[0.29, 0.34, 0.56]} material={dogMaterials.coat} castShadow>
+          <sphereGeometry args={[1, 12, 9]} />
+        </mesh>
+        <mesh position={[0, 0.58, 0.42]} scale={[0.25, 0.27, 0.28]} material={dogMaterials.coat} castShadow>
+          <sphereGeometry args={[1, 12, 9]} />
+        </mesh>
+        <mesh position={[0, 0.48, 0.64]} scale={[0.16, 0.13, 0.22]} material={dogMaterials.muzzle} castShadow>
+          <sphereGeometry args={[1, 10, 8]} />
+        </mesh>
+        <mesh position={[0, 0.53, 0.83]} material={dogMaterials.nose}>
+          <sphereGeometry args={[0.075, 9, 7]} />
+        </mesh>
+        {[-1, 1].map((side) => (
+          <group key={side}>
+            <mesh position={[side * 0.16, 0.78, 0.36]} rotation={[0.12, 0, side * -0.22]} scale={[0.1, 0.19, 0.1]} material={dogMaterials.ears} castShadow>
+              <coneGeometry args={[1, 1, 6]} />
+            </mesh>
+            <mesh position={[side * 0.11, 0.64, 0.62]} material={dogMaterials.eyes}>
+              <sphereGeometry args={[0.027, 7, 6]} />
+            </mesh>
+          </group>
+        ))}
+        <group ref={dogTail} position={[0, 0.58, -0.48]}>
+          <mesh rotation={[0.45, 0, 0]} material={dogMaterials.coat} castShadow>
+            <capsuleGeometry args={[0.055, 0.34, 4, 7]} />
+          </mesh>
+        </group>
+        {[
+          [-0.19, -0.2],
+          [0.19, -0.2],
+          [-0.19, 0.34],
+          [0.19, 0.34],
+        ].map(([x, z], index) => (
+          <group
+            key={index}
+            ref={(leg) => { dogLegs.current[index] = leg; }}
+            position={[x, 0.32, z]}
+          >
+            <mesh material={dogMaterials.coat} castShadow>
+              <capsuleGeometry args={[0.075, 0.29, 4, 7]} />
+            </mesh>
+            <mesh position={[0, -0.15, 0.06]} scale={[1, 0.68, 1.3]} material={dogMaterials.muzzle} castShadow>
+              <sphereGeometry args={[0.075, 8, 6]} />
+            </mesh>
+          </group>
+        ))}
       </group>
       <group ref={beetleWalk} scale={0.9}>
         <group ref={beetleShell} position={[0, 0.06, 0]} scale={[0.17, 0.1, 0.23]}>
@@ -1464,9 +1965,176 @@ function LogCabin({ reducedMotion }) {
   );
 }
 
-function Terrain({ reducedMotion }) {
+function CabinGrove() {
+  const trees = useMemo(() => [
+    { x: -3.35, z: -2.35, height: 2.4, crown: '#55744b' },
+    { x: 3.65, z: -2.7, height: 2.8, crown: '#718653' },
+    { x: -3.7, z: 1.35, height: 2.15, crown: '#647a4c' },
+    { x: 3.7, z: 1.5, height: 2.55, crown: '#87935a' },
+    { x: -2.8, z: 4.05, height: 2.35, crown: '#738650' },
+    { x: 2.9, z: -4.15, height: 2.2, crown: '#586f49' },
+  ], []);
+  const trunkGeometry = useMemo(() => new THREE.CylinderGeometry(0.1, 0.18, 1, 7), []);
+  const crownGeometry = useMemo(() => new THREE.IcosahedronGeometry(1, 1), []);
+  const trunkMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#765039',
+    roughness: 0.96,
+    flatShading: true,
+  }), []);
+  const crownMaterials = useMemo(() => trees.map((tree) => new THREE.MeshStandardMaterial({
+    color: tree.crown,
+    roughness: 0.92,
+    flatShading: true,
+  })), [trees]);
+
+  useEffect(() => () => {
+    trunkGeometry.dispose();
+    crownGeometry.dispose();
+    trunkMaterial.dispose();
+    crownMaterials.forEach((material) => material.dispose());
+  }, [crownGeometry, crownMaterials, trunkGeometry, trunkMaterial]);
+
+  return (
+    <group>
+      {trees.map((tree, index) => {
+        const x = 11.1 + tree.x;
+        const z = -8.4 + tree.z;
+        const y = terrainHeight(x, z);
+        return (
+          <group key={index} position={[x, y, z]}>
+            <mesh
+              geometry={trunkGeometry}
+              material={trunkMaterial}
+              position={[0, tree.height * 0.38, 0]}
+              scale={[1, tree.height * 0.76, 1]}
+              castShadow
+              receiveShadow
+            />
+            <mesh
+              geometry={crownGeometry}
+              material={crownMaterials[index]}
+              position={[0, tree.height * 0.83, 0]}
+              scale={[0.8, tree.height * 0.38, 0.8]}
+              castShadow
+            />
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function ForestReader({ greeting, reducedMotion }) {
+  const head = useRef(null);
+  const book = useRef(null);
+  const readerMaterials = useMemo(() => ({
+    coat: new THREE.MeshStandardMaterial({ color: '#536b5f', roughness: 0.9, flatShading: true }),
+    trousers: new THREE.MeshStandardMaterial({ color: '#57493b', roughness: 0.92, flatShading: true }),
+    skin: new THREE.MeshStandardMaterial({ color: '#d8a98c', roughness: 0.82 }),
+    hair: new THREE.MeshStandardMaterial({ color: '#44352e', roughness: 0.94, flatShading: true }),
+    wood: new THREE.MeshStandardMaterial({ color: '#78573d', roughness: 0.96, flatShading: true }),
+    book: new THREE.MeshStandardMaterial({ color: '#6f4935', roughness: 0.84 }),
+    pages: new THREE.MeshStandardMaterial({ color: '#e8dcc0', roughness: 0.92 }),
+  }), []);
+  const y = terrainHeight(READER_POSITION.x, READER_LOCAL_Z);
+
+  useFrame((_, delta) => {
+    if (reducedMotion) return;
+    if (head.current) {
+      head.current.rotation.x = THREE.MathUtils.damp(
+        head.current.rotation.x,
+        greeting ? 0.13 : -0.3,
+        greeting ? 2.8 : 1.8,
+        delta,
+      );
+      head.current.rotation.y = THREE.MathUtils.damp(
+        head.current.rotation.y,
+        greeting ? 0.16 : 0,
+        2.2,
+        delta,
+      );
+    }
+    if (book.current) {
+      book.current.rotation.x = THREE.MathUtils.damp(
+        book.current.rotation.x,
+        greeting ? 0.04 : 0.24,
+        2.4,
+        delta,
+      );
+    }
+  });
+
+  useEffect(() => () => {
+    Object.values(readerMaterials).forEach((material) => material.dispose());
+  }, [readerMaterials]);
+
+  return (
+    <group position={[READER_POSITION.x, y, READER_POSITION.z]} rotation={[0, Math.PI / 2, 0]}>
+      <mesh position={[0, 0.42, 0]} rotation={[0, 0, Math.PI / 2]} material={readerMaterials.wood} castShadow receiveShadow>
+        <cylinderGeometry args={[0.19, 0.2, 1.45, 8]} />
+      </mesh>
+      {[-0.48, 0.48].map((x) => (
+        <mesh key={x} position={[x, 0.21, 0]} material={readerMaterials.wood} castShadow>
+          <cylinderGeometry args={[0.075, 0.09, 0.4, 7]} />
+        </mesh>
+      ))}
+      <group position={[0, 0.53, 0.04]}>
+        <mesh position={[0, 0.38, 0.09]} rotation={[0.1, 0, 0]} material={readerMaterials.trousers} castShadow>
+          <boxGeometry args={[0.5, 0.29, 0.48]} />
+        </mesh>
+        {[-0.16, 0.16].map((x) => (
+          <group key={x} position={[x, 0.26, 0.07]}>
+            <mesh position={[0, -0.04, -0.29]} rotation={[Math.PI / 2, 0, 0]} material={readerMaterials.trousers} castShadow>
+              <capsuleGeometry args={[0.1, 0.42, 4, 8]} />
+            </mesh>
+            <mesh position={[0, -0.1, -0.54]} material={readerMaterials.wood} castShadow>
+              <boxGeometry args={[0.18, 0.1, 0.3]} />
+            </mesh>
+          </group>
+        ))}
+        <mesh position={[0, 0.76, 0.1]} rotation={[0.08, 0, 0]} material={readerMaterials.coat} castShadow receiveShadow>
+          <capsuleGeometry args={[0.27, 0.47, 5, 9]} />
+        </mesh>
+        <group ref={head} position={[0, 1.31, -0.01]}>
+          <mesh scale={[0.23, 0.26, 0.22]} material={readerMaterials.skin} castShadow>
+            <sphereGeometry args={[1, 12, 9]} />
+          </mesh>
+          <mesh position={[0, 0.13, 0.045]} scale={[1.04, 0.68, 0.92]} material={readerMaterials.hair} castShadow>
+            <sphereGeometry args={[0.23, 11, 8]} />
+          </mesh>
+        </group>
+        <group ref={book} position={[0, 0.73, -0.3]} rotation={[0.24, 0, 0]}>
+          <mesh position={[0, 0, 0]} material={readerMaterials.book} castShadow>
+            <boxGeometry args={[0.49, 0.065, 0.34]} />
+          </mesh>
+          {[-0.12, 0.12].map((x) => (
+            <mesh key={x} position={[x, 0.04, 0]} rotation={[0, 0, x < 0 ? -0.04 : 0.04]} material={readerMaterials.pages}>
+              <boxGeometry args={[0.225, 0.018, 0.3]} />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.05, 0]} material={readerMaterials.book}>
+            <boxGeometry args={[0.025, 0.025, 0.32]} />
+          </mesh>
+        </group>
+        {[-1, 1].map((side) => (
+          <group key={side} position={[side * 0.25, 0.98, 0.02]} rotation={[0, 0, side * -0.28]}>
+            <mesh position={[side * -0.025, -0.16, -0.12]} rotation={[0.5, 0, side * 0.16]} material={readerMaterials.coat} castShadow>
+              <capsuleGeometry args={[0.085, 0.29, 4, 7]} />
+            </mesh>
+            <mesh position={[side * -0.045, -0.29, -0.23]} material={readerMaterials.skin} castShadow>
+              <sphereGeometry args={[0.075, 8, 6]} />
+            </mesh>
+          </group>
+        ))}
+      </group>
+    </group>
+  );
+}
+
+function Terrain({ reducedMotion, dogActive }) {
   const geometry = useMemo(() => createTerrainGeometry(), []);
   const branchTrailGeometry = useMemo(() => createBranchTrailGeometry(), []);
+  const cabinTrailGeometry = useMemo(() => createCabinTrailGeometry(), []);
   const mesh = useRef(null);
   const { pointer } = useThree();
   const terrainMaps = useMemo(() => createTerrainMaps(), []);
@@ -1494,13 +2162,14 @@ function Terrain({ reducedMotion }) {
   useEffect(() => () => {
     geometry.dispose();
     branchTrailGeometry.dispose();
+    cabinTrailGeometry.dispose();
     terrainMaterial.dispose();
     branchTrailMaterial.dispose();
     terrainMaps.colorMap.dispose();
     terrainMaps.normalMap.dispose();
     terrainMaps.bumpMap.dispose();
     terrainMaps.roughnessMap.dispose();
-  }, [branchTrailGeometry, branchTrailMaterial, geometry, terrainMaps, terrainMaterial]);
+  }, [branchTrailGeometry, branchTrailMaterial, cabinTrailGeometry, geometry, terrainMaps, terrainMaterial]);
 
   useFrame((_, delta) => {
     if (!mesh.current || reducedMotion) return;
@@ -1513,9 +2182,12 @@ function Terrain({ reducedMotion }) {
         <primitive object={terrainMaterial} attach="material" />
       </mesh>
       <mesh geometry={branchTrailGeometry} material={branchTrailMaterial} receiveShadow />
+      <mesh geometry={cabinTrailGeometry} material={branchTrailMaterial} receiveShadow />
       <CreekWater reducedMotion={reducedMotion} />
-      <Waterfall reducedMotion={reducedMotion} />
-      <LogCabin reducedMotion={reducedMotion} />
+      <LogCabin reducedMotion={reducedMotion} dogActive={dogActive} />
+      <CabinGrove />
+      <CreeksideTree reducedMotion={reducedMotion} />
+      <MountainRocks />
       <Forest />
       <MeadowGrass reducedMotion={reducedMotion} />
       <Wildflowers reducedMotion={reducedMotion} />
@@ -1540,14 +2212,27 @@ function usePortalCurve(scale = 1) {
   }, [scale]);
 }
 
-function PortalRim({ z, scale, radius, color, emissive, intensity }) {
+function PortalRim({ z, scale, radius, color, emissive, intensity, canEnterGalaxy }) {
+  const rim = useRef(null);
   const curve = usePortalCurve(scale);
   const geometry = useMemo(() => new THREE.TubeGeometry(curve, 192, radius, 10, true), [curve, radius]);
+
+  useFrame(({ clock }, delta) => {
+    const material = rim.current?.material;
+    if (!material) return;
+    const pulse = canEnterGalaxy ? 1.8 + Math.sin(clock.elapsedTime * 3.2) * 0.18 : 1;
+    material.emissiveIntensity = THREE.MathUtils.damp(
+      material.emissiveIntensity,
+      intensity * pulse,
+      4,
+      delta,
+    );
+  });
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   return (
-    <mesh geometry={geometry} position={[0, 0, z]} castShadow>
+    <mesh ref={rim} geometry={geometry} position={[0, 0, z]} castShadow>
       <meshStandardMaterial
         color={color}
         emissive={emissive}
@@ -1556,6 +2241,180 @@ function PortalRim({ z, scale, radius, color, emissive, intensity }) {
         roughness={0.32}
       />
     </mesh>
+  );
+}
+
+function CosmicMirror({ canEnterGalaxy, reducedMotion }) {
+  const material = useRef(null);
+
+  useFrame(({ clock }, delta) => {
+    const uniforms = material.current?.uniforms;
+    if (!uniforms) return;
+    uniforms.uTime.value = reducedMotion ? 0 : clock.elapsedTime;
+    uniforms.uProximity.value = THREE.MathUtils.damp(
+      uniforms.uProximity.value,
+      canEnterGalaxy ? 1 : 0,
+      1.8,
+      delta,
+    );
+  });
+
+  return (
+    <mesh position={[0, 0, -0.45]} scale={[2.35, 3.7, 0.62]}>
+      <sphereGeometry args={[1, 48, 36]} />
+      <shaderMaterial
+        ref={material}
+        uniforms={{ uTime: { value: 0 }, uProximity: { value: 0 } }}
+        vertexShader={`
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `}
+        fragmentShader={`
+          varying vec2 vUv;
+          uniform float uTime;
+          uniform float uProximity;
+
+          float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+          }
+
+          void main() {
+            float speed = mix(0.24, 0.72, uProximity);
+            vec2 uv = vUv;
+            float wave = sin(uv.y * 24.0 + uTime * speed) * 0.008
+              + sin(uv.x * 17.0 - uTime * speed * 0.72) * 0.006;
+            uv.x += wave;
+            uv.y += sin(uv.x * 20.0 + uTime * 0.31) * 0.005;
+
+            float ripple = sin(length((uv - 0.5) * vec2(1.0, 0.72)) * 52.0 - uTime * speed * 1.8);
+            float sheen = pow(max(0.0, ripple * 0.5 + 0.5), 10.0);
+            float reflection = pow(max(0.0, sin(uv.x * 9.0 + uv.y * 12.0 + uTime * 0.18)), 16.0);
+            vec3 obsidian = mix(vec3(0.006, 0.012, 0.035), vec3(0.025, 0.045, 0.1), uv.y);
+            obsidian += vec3(0.025, 0.055, 0.11) * sheen * (0.25 + uProximity * 0.55);
+            obsidian += vec3(0.11, 0.22, 0.38) * reflection * (0.22 + uProximity * 0.6);
+
+            vec2 starGrid = floor(uv * vec2(72.0, 46.0));
+            vec2 starPoint = fract(uv * vec2(72.0, 46.0)) - 0.5;
+            float starSeed = hash(starGrid);
+            float star = (1.0 - smoothstep(0.015, 0.075, length(starPoint)))
+              * step(0.991, starSeed)
+              * (0.48 + 0.52 * sin(uTime * 1.7 + starSeed * 62.0));
+            obsidian += vec3(0.58, 0.77, 1.0) * star * (0.5 + uProximity * 1.2);
+            gl_FragColor = vec4(obsidian, 1.0);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+          }
+        `}
+        toneMapped
+      />
+    </mesh>
+  );
+}
+
+function PortalGravity({ canEnterGalaxy, reducedMotion }) {
+  const leafMesh = useRef(null);
+  const motePositions = useRef(null);
+  const leafGeometry = useMemo(() => new THREE.SphereGeometry(1, 7, 5), []);
+  const leafMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    roughness: 0.88,
+    flatShading: true,
+  }), []);
+  const motes = useMemo(() => {
+    const random = createRandom(34817);
+    return Array.from({ length: 104 }, () => ({
+      angle: random() * Math.PI * 2,
+      progress: random(),
+      speed: 0.075 + random() * 0.12,
+      size: 0.018 + random() * 0.034,
+    }));
+  }, []);
+  const leaves = useMemo(() => {
+    const random = createRandom(8731);
+    const palette = ['#7b8950', '#9c8958', '#536c48', '#aa704e'];
+    return Array.from({ length: 22 }, () => ({
+      angle: random() * Math.PI * 2,
+      progress: random(),
+      speed: 0.035 + random() * 0.045,
+      rotation: random() * Math.PI * 2,
+      color: new THREE.Color(palette[Math.floor(random() * palette.length)]),
+    }));
+  }, []);
+  const moteProgress = useRef(new Float32Array(motes.map((mote) => mote.progress)));
+  const leafProgress = useRef(new Float32Array(leaves.map((leaf) => leaf.progress)));
+  const scratch = useMemo(() => ({
+    position: new THREE.Vector3(),
+    scale: new THREE.Vector3(),
+    rotation: new THREE.Quaternion(),
+    matrix: new THREE.Matrix4(),
+    axis: new THREE.Vector3(0, 1, 0),
+  }), []);
+
+  useFrame((_, delta) => {
+    const positions = motePositions.current;
+    if (!positions || !leafMesh.current) return;
+    const { position, scale, rotation, matrix, axis } = scratch;
+    const speedScale = reducedMotion ? 0 : canEnterGalaxy ? 1.9 : 0.75;
+    motes.forEach((mote, index) => {
+      moteProgress.current[index] = (moteProgress.current[index] + delta * mote.speed * speedScale) % 1;
+      const progress = moteProgress.current[index];
+      const radius = THREE.MathUtils.lerp(4.5, 0.08, progress);
+      const angle = mote.angle + progress * 5.2;
+      positions.setXYZ(
+        index,
+        Math.cos(angle) * radius,
+        -3.55 * (1 - progress) + Math.sin(progress * Math.PI) * 0.52,
+        1.15 * (1 - progress) + 0.14,
+      );
+    });
+    positions.needsUpdate = true;
+
+    leaves.forEach((leaf, index) => {
+      leafProgress.current[index] = (leafProgress.current[index] + delta * leaf.speed * speedScale) % 1;
+      const progress = leafProgress.current[index];
+      const radius = THREE.MathUtils.lerp(4.7, 0.12, progress);
+      const angle = leaf.angle + progress * 3.8;
+      position.set(
+        Math.cos(angle) * radius,
+        -3.72 * (1 - progress) + Math.sin(progress * Math.PI) * 0.3,
+        1.45 * (1 - progress) + 0.2,
+      );
+      scale.set(0.16 * (1 - progress * 0.45), 0.025, 0.075 * (1 - progress * 0.45));
+      rotation.setFromAxisAngle(axis, leaf.rotation + progress * 5);
+      matrix.compose(position, rotation, scale);
+      leafMesh.current.setMatrixAt(index, matrix);
+      leafMesh.current.setColorAt(index, leaf.color);
+    });
+    leafMesh.current.instanceMatrix.needsUpdate = true;
+    if (leafMesh.current.instanceColor) leafMesh.current.instanceColor.needsUpdate = true;
+  });
+
+  useEffect(() => () => {
+    leafGeometry.dispose();
+    leafMaterial.dispose();
+  }, [leafGeometry, leafMaterial]);
+
+  return (
+    <>
+      <points frustumCulled={false}>
+        <bufferGeometry>
+          <bufferAttribute
+            ref={motePositions}
+            attach="attributes-position"
+            args={[new Float32Array(motes.length * 3), 3]}
+          />
+        </bufferGeometry>
+        <pointsMaterial color="#b9ddff" size={0.045} sizeAttenuation transparent opacity={0.82} depthWrite={false} />
+      </points>
+      <instancedMesh
+        ref={leafMesh}
+        args={[leafGeometry, leafMaterial, leaves.length]}
+        frustumCulled={false}
+      />
+    </>
   );
 }
 
@@ -1590,23 +2449,31 @@ function PortalStars({ reducedMotion }) {
   );
 }
 
-function Portal({ reducedMotion, onEnterGalaxy }) {
+function Portal({ reducedMotion, canEnterGalaxy, onEnterGalaxy }) {
   const portal = useRef(null);
   const orbit = useRef(null);
+  const portalLight = useRef(null);
 
   useFrame(({ clock }, delta) => {
-    if (reducedMotion) return;
     const time = clock.elapsedTime;
-    if (portal.current) portal.current.rotation.y = THREE.MathUtils.damp(portal.current.rotation.y, Math.sin(time * 0.24) * 0.035, 1.8, delta);
-    if (orbit.current) orbit.current.rotation.z = time * 0.04;
+    if (!reducedMotion) {
+      if (portal.current) portal.current.rotation.y = THREE.MathUtils.damp(portal.current.rotation.y, Math.sin(time * 0.24) * 0.035, 1.8, delta);
+      if (orbit.current) orbit.current.rotation.z = time * 0.04;
+    }
+    if (portalLight.current) {
+      portalLight.current.intensity = THREE.MathUtils.damp(
+        portalLight.current.intensity,
+        canEnterGalaxy ? 3.2 : 1.7,
+        3,
+        delta,
+      );
+    }
   });
 
   return (
     <group ref={portal} position={[0, 3.1, -8.4]}>
-      <mesh position={[0, 0, -0.45]} scale={[2.35, 3.7, 0.62]}>
-        <sphereGeometry args={[1, 48, 36]} />
-        <meshStandardMaterial color="#071522" emissive="#102e56" emissiveIntensity={0.75} roughness={0.28} metalness={0.24} />
-      </mesh>
+      <CosmicMirror canEnterGalaxy={canEnterGalaxy} reducedMotion={reducedMotion} />
+      <PortalGravity canEnterGalaxy={canEnterGalaxy} reducedMotion={reducedMotion} />
       <mesh
         position={[0, 0, 0.16]}
         onClick={(event) => {
@@ -1617,9 +2484,9 @@ function Portal({ reducedMotion, onEnterGalaxy }) {
         <planeGeometry args={[4.25, 7]} />
         <meshBasicMaterial transparent opacity={0} side={THREE.DoubleSide} depthWrite={false} />
       </mesh>
-      <PortalRim z={0.22} scale={1.06} radius={0.14} color="#d8c5a0" emissive="#8a643d" intensity={0.32} />
-      <PortalRim z={0} scale={1} radius={0.075} color="#9bbdf0" emissive="#3986ff" intensity={1.5} />
-      <PortalRim z={-0.4} scale={0.89} radius={0.065} color="#577da8" emissive="#244e8d" intensity={0.82} />
+      <PortalRim z={0.22} scale={1.06} radius={0.14} color="#d8c5a0" emissive="#8a643d" intensity={0.32} canEnterGalaxy={canEnterGalaxy} />
+      <PortalRim z={0} scale={1} radius={0.075} color="#9bbdf0" emissive="#3986ff" intensity={1.5} canEnterGalaxy={canEnterGalaxy} />
+      <PortalRim z={-0.4} scale={0.89} radius={0.065} color="#577da8" emissive="#244e8d" intensity={0.82} canEnterGalaxy={canEnterGalaxy} />
 
       <PortalStars reducedMotion={reducedMotion} />
       <group ref={orbit}>
@@ -1640,7 +2507,7 @@ function Portal({ reducedMotion, onEnterGalaxy }) {
           <meshStandardMaterial color="#d9c18d" emissive="#8b6b36" emissiveIntensity={0.5} metalness={0.6} roughness={0.3} />
         </mesh>
       </group>
-      <pointLight position={[0, 0, 1.6]} color="#75aaff" intensity={2.1} distance={12} />
+      <pointLight ref={portalLight} position={[0, 0, 1.6]} color="#75aaff" intensity={1.7} distance={12} />
     </group>
   );
 }
@@ -1651,6 +2518,80 @@ function Limb({ position, rotation = [0, 0, 0], color, radius = 0.12, length = 0
       <capsuleGeometry args={[radius, length, 5, 10]} />
       <meshStandardMaterial color={color} roughness={0.76} />
     </mesh>
+  );
+}
+
+function Hand({ mirror = 1, material }) {
+  const fingerLengths = [0.17, 0.21, 0.19, 0.15];
+  return (
+    <group scale={[mirror, 1, 1]}>
+      <mesh position={[0, -0.045, 0]} scale={[0.085, 0.115, 0.055]} material={material} castShadow>
+        <sphereGeometry args={[1, 12, 9]} />
+      </mesh>
+      {fingerLengths.map((length, index) => {
+        const x = (index - 1.5) * 0.043;
+        return (
+          <group key={index} position={[x, -0.12, 0.005]} rotation={[0, 0, (index - 1.5) * -0.07]}>
+            <mesh position={[0, -length * 0.36, 0]} material={material} castShadow>
+              <capsuleGeometry args={[0.023, length * 0.58, 4, 7]} />
+            </mesh>
+            <mesh position={[0, -length * 0.76, 0.003]} scale={[0.92, 0.96, 0.92]} material={material} castShadow>
+              <sphereGeometry args={[0.022, 8, 6]} />
+            </mesh>
+          </group>
+        );
+      })}
+      <group position={[mirror * 0.065, -0.005, 0.01]} rotation={[0, 0, mirror * -0.72]}>
+        <mesh position={[0, -0.065, 0]} material={material} castShadow>
+          <capsuleGeometry args={[0.027, 0.105, 4, 7]} />
+        </mesh>
+        <mesh position={[0, -0.12, 0]} material={material} castShadow>
+          <sphereGeometry args={[0.027, 8, 6]} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+function Sneaker({ upperMaterial, soleMaterial, laceMaterial, sideMaterial }) {
+  return (
+    <group>
+      <mesh position={[0, -0.055, -0.055]} material={soleMaterial} castShadow receiveShadow>
+        <boxGeometry args={[0.26, 0.105, 0.43]} />
+      </mesh>
+      <mesh position={[0, -0.002, -0.06]} material={sideMaterial} castShadow>
+        <boxGeometry args={[0.267, 0.045, 0.405]} />
+      </mesh>
+      <mesh position={[0, 0.065, -0.045]} scale={[0.115, 0.088, 0.205]} material={upperMaterial} castShadow receiveShadow>
+        <sphereGeometry args={[1, 16, 10]} />
+      </mesh>
+      <mesh position={[0, 0.045, -0.185]} scale={[0.108, 0.068, 0.1]} material={upperMaterial} castShadow>
+        <sphereGeometry args={[1, 14, 9]} />
+      </mesh>
+      <mesh position={[0, 0.115, 0.055]} scale={[0.09, 0.072, 0.095]} material={upperMaterial} castShadow>
+        <sphereGeometry args={[1, 12, 8]} />
+      </mesh>
+      <mesh position={[0, 0.125, 0.056]} material={sideMaterial}>
+        <boxGeometry args={[0.13, 0.015, 0.012]} />
+      </mesh>
+      {[-1, 1].map((side) => (
+        <group key={side}>
+          {[0.005, 0.045, 0.085].map((y, index) => (
+            <group key={y} position={[side * (0.075 - index * 0.008), y + 0.092, -0.09 + index * 0.055]}>
+              <mesh rotation={[0.02, 0, side * 0.12]} material={laceMaterial} castShadow>
+                <capsuleGeometry args={[0.009, 0.105, 3, 5]} />
+              </mesh>
+              <mesh position={[0, 0, 0.012]} material={laceMaterial}>
+                <sphereGeometry args={[0.011, 6, 5]} />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      ))}
+      <mesh position={[0, 0.015, -0.055]} material={sideMaterial}>
+        <boxGeometry args={[0.275, 0.018, 0.42]} />
+      </mesh>
+    </group>
   );
 }
 
@@ -1809,6 +2750,96 @@ function createFabricMaps() {
   return { map, bumpMap, normalMap };
 }
 
+function createBagFabricMaps() {
+  const size = 256;
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = size;
+  colorCanvas.height = size;
+  const colorContext = colorCanvas.getContext('2d');
+  const leatherGradient = colorContext.createLinearGradient(0, 0, size, size);
+  leatherGradient.addColorStop(0, '#9b6b46');
+  leatherGradient.addColorStop(0.48, '#815334');
+  leatherGradient.addColorStop(1, '#a4764c');
+  colorContext.fillStyle = leatherGradient;
+  colorContext.fillRect(0, 0, size, size);
+  let grainSeed = 19871;
+  const randomGrain = () => {
+    grainSeed = (grainSeed * 16807) % 2147483647;
+    return (grainSeed - 1) / 2147483646;
+  };
+  for (let index = 0; index < 1800; index += 1) {
+    const x = randomGrain() * size;
+    const y = randomGrain() * size;
+    const length = 2 + randomGrain() * 12;
+    colorContext.strokeStyle = randomGrain() > 0.52
+      ? 'rgba(53, 32, 19, 0.11)'
+      : 'rgba(242, 205, 157, 0.12)';
+    colorContext.lineWidth = 0.45 + randomGrain() * 0.8;
+    colorContext.beginPath();
+    colorContext.moveTo(x, y);
+    colorContext.lineTo(x + length, y + (randomGrain() - 0.5) * 2);
+    colorContext.stroke();
+  }
+
+  const bumpCanvas = document.createElement('canvas');
+  bumpCanvas.width = size;
+  bumpCanvas.height = size;
+  const bumpContext = bumpCanvas.getContext('2d');
+  bumpContext.fillStyle = '#858585';
+  bumpContext.fillRect(0, 0, size, size);
+  for (let index = 0; index < 1600; index += 1) {
+    const x = randomGrain() * size;
+    const y = randomGrain() * size;
+    const length = 2 + randomGrain() * 10;
+    const tone = Math.round(112 + randomGrain() * 72);
+    bumpContext.strokeStyle = `rgba(${tone}, ${tone}, ${tone}, 0.48)`;
+    bumpContext.lineWidth = 0.6 + randomGrain() * 1.1;
+    bumpContext.beginPath();
+    bumpContext.moveTo(x, y);
+    bumpContext.lineTo(x + length, y + (randomGrain() - 0.5) * 2);
+    bumpContext.stroke();
+  }
+
+  const map = new THREE.CanvasTexture(colorCanvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  [map, bumpMap].forEach((texture) => {
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(2, 2);
+  });
+  return { map, bumpMap };
+}
+
+function createLeatherStrapGeometry(curve, width) {
+  const segments = 44;
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+  for (let index = 0; index <= segments; index += 1) {
+    const t = index / segments;
+    const point = curve.getPointAt(t);
+    const tangent = curve.getTangentAt(t);
+    const normalX = -tangent.y;
+    const normalY = tangent.x;
+    positions.push(
+      point.x - normalX * width * 0.5, point.y - normalY * width * 0.5, point.z,
+      point.x + normalX * width * 0.5, point.y + normalY * width * 0.5, point.z,
+    );
+    uvs.push(0, t * 5, 1, t * 5);
+    if (index < segments) {
+      const current = index * 2;
+      indices.push(current, current + 1, current + 2, current + 1, current + 3, current + 2);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(indices);
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 function createDressGeometry(profile) {
   const radialSegments = 72;
   const heightSegments = 40;
@@ -1854,7 +2885,7 @@ function createDressGeometry(profile) {
   return geometry;
 }
 
-function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter }) {
+function Walker({ reducedMotion, movement, isNearReader, onJourneyStateChange }) {
   const root = useRef(null);
   const body = useRef(null);
   const hair = useRef(null);
@@ -1867,7 +2898,13 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
   const cameraTarget = useMemo(() => new THREE.Vector3(), []);
   const direction = useMemo(() => new THREE.Vector3(), []);
   const walkStartedAt = useRef(null);
-  const portalTriggered = useRef(false);
+  const previousJourneyState = useRef({
+    hasMoved: false,
+    isNearPortal: false,
+    isNearCabin: false,
+    isNearReader: false,
+    isAtSummit: false,
+  });
   const dressProfile = useMemo(() => [
     new THREE.Vector2(0.4, 0.22),
     new THREE.Vector2(0.48, 0.26),
@@ -1895,6 +2932,113 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
     displacementScale: 0.004,
     roughness: 0.96,
   }), [fabricMaps]);
+  const bagMaps = useMemo(() => createBagFabricMaps(), []);
+  const bagMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    map: bagMaps.map,
+    bumpMap: bagMaps.bumpMap,
+    bumpScale: 0.065,
+    roughness: 0.78,
+  }), [bagMaps]);
+  const leatherGeometry = useMemo(() => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.18, -0.2);
+    shape.lineTo(0.18, -0.2);
+    shape.quadraticCurveTo(0.215, -0.2, 0.215, -0.16);
+    shape.lineTo(0.215, 0.16);
+    shape.quadraticCurveTo(0.215, 0.2, 0.18, 0.2);
+    shape.lineTo(-0.18, 0.2);
+    shape.quadraticCurveTo(-0.215, 0.2, -0.215, 0.16);
+    shape.lineTo(-0.215, -0.16);
+    shape.quadraticCurveTo(-0.215, -0.2, -0.18, -0.2);
+    return new THREE.ExtrudeGeometry(shape, {
+      depth: 0.15,
+      bevelEnabled: true,
+      bevelSegments: 3,
+      steps: 1,
+      bevelSize: 0.018,
+      bevelThickness: 0.018,
+      curveSegments: 6,
+    });
+  }, []);
+  const flapGeometry = useMemo(() => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-0.2, 0.08);
+    shape.quadraticCurveTo(-0.2, 0.13, -0.16, 0.13);
+    shape.lineTo(0.16, 0.13);
+    shape.quadraticCurveTo(0.2, 0.13, 0.2, 0.08);
+    shape.lineTo(0.17, -0.1);
+    shape.quadraticCurveTo(0, -0.16, -0.17, -0.1);
+    shape.closePath();
+    return new THREE.ExtrudeGeometry(shape, {
+      depth: 0.035,
+      bevelEnabled: true,
+      bevelSegments: 3,
+      steps: 1,
+      bevelSize: 0.012,
+      bevelThickness: 0.012,
+      curveSegments: 6,
+    });
+  }, []);
+  const strapMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#8b5b39',
+    map: bagMaps.map,
+    bumpMap: bagMaps.bumpMap,
+    bumpScale: 0.04,
+    roughness: 0.76,
+    side: THREE.DoubleSide,
+  }), [bagMaps]);
+  const strapCurve = useMemo(() => new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.25, 1.77, -0.22),
+    new THREE.Vector3(0.31, 1.52, -0.28),
+    new THREE.Vector3(0.08, 1.22, -0.34),
+    new THREE.Vector3(-0.22, 0.96, -0.36),
+    new THREE.Vector3(-0.31, 0.78, -0.3),
+  ]), []);
+  const strapGeometry = useMemo(() => createLeatherStrapGeometry(strapCurve, 0.088), [strapCurve]);
+  const backStrapCurve = useMemo(() => new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.31, 0.78, 0.42),
+    new THREE.Vector3(-0.22, 1.05, 0.5),
+    new THREE.Vector3(0.02, 1.34, 0.5),
+    new THREE.Vector3(0.27, 1.58, 0.45),
+    new THREE.Vector3(0.25, 1.77, 0.35),
+  ]), []);
+  const backStrapGeometry = useMemo(() => createLeatherStrapGeometry(backStrapCurve, 0.088), [backStrapCurve]);
+  const strapStitchGeometries = useMemo(() => [strapCurve, backStrapCurve].flatMap((curve) => (
+    [-1, 1].map((side) => {
+      const points = Array.from({ length: 28 }, (_, index) => {
+        const t = index / 27;
+        const point = curve.getPointAt(t);
+        const tangent = curve.getTangentAt(t);
+        const offset = side * 0.035;
+        return new THREE.Vector3(
+          point.x - tangent.y * offset,
+          point.y + tangent.x * offset,
+          point.z - 0.008,
+        );
+      });
+      return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 48, 0.0045, 5, false);
+    })
+  )), [backStrapCurve, strapCurve]);
+  const claspMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#d9bb7b',
+    metalness: 0.88,
+    roughness: 0.3,
+  }), []);
+  const stitchMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#e0bd8b',
+    roughness: 0.9,
+  }), []);
+  const handMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#e3b49b',
+    roughness: 0.78,
+  }), []);
+  const sneakerMaterials = useMemo(() => ({
+    upper: new THREE.MeshStandardMaterial({ color: '#d8d0bd', roughness: 0.86 }),
+    sole: new THREE.MeshStandardMaterial({ color: '#403a37', roughness: 0.92 }),
+    lace: new THREE.MeshStandardMaterial({ color: '#f0e9d8', roughness: 0.88 }),
+    accent: new THREE.MeshStandardMaterial({ color: '#82928a', roughness: 0.72 }),
+  }), []);
   const hairProfile = useMemo(() => [
     new THREE.Vector2(0.12, -0.67),
     new THREE.Vector2(0.27, -0.59),
@@ -1911,7 +3055,56 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
     fabricMaps.map.dispose();
     fabricMaps.bumpMap.dispose();
     fabricMaps.normalMap.dispose();
-  }, [dressGeometry, fabricMaps, fabricMaterial]);
+    bagMaterial.dispose();
+    strapMaterial.dispose();
+    bagMaps.map.dispose();
+    bagMaps.bumpMap.dispose();
+    leatherGeometry.dispose();
+    flapGeometry.dispose();
+    strapGeometry.dispose();
+    backStrapGeometry.dispose();
+    strapStitchGeometries.forEach((geometry) => geometry.dispose());
+    claspMaterial.dispose();
+    stitchMaterial.dispose();
+    handMaterial.dispose();
+    Object.values(sneakerMaterials).forEach((material) => material.dispose());
+  }, [
+    backStrapGeometry,
+    bagMaps,
+    bagMaterial,
+    claspMaterial,
+    dressGeometry,
+    fabricMaps,
+    fabricMaterial,
+    flapGeometry,
+    handMaterial,
+    leatherGeometry,
+    sneakerMaterials,
+    strapGeometry,
+    strapMaterial,
+    strapStitchGeometries,
+    stitchMaterial,
+  ]);
+
+  useEffect(() => {
+    const arm = rightArm.current;
+    if (!arm) return undefined;
+    if (!isNearReader) {
+      const returnToRest = gsap.to(arm.rotation, {
+        z: 0,
+        duration: 0.3,
+        ease: 'power2.out',
+      });
+      return () => returnToRest.kill();
+    }
+
+    const greeting = gsap.timeline();
+    greeting
+      .to(arm.rotation, { z: 1.02, duration: 0.38, ease: 'power2.out' })
+      .to(arm.rotation, { z: 0.78, duration: 0.18, repeat: 2, yoyo: true, ease: 'sine.inOut' })
+      .to(arm.rotation, { z: 0, duration: 0.38, ease: 'power2.inOut' });
+    return () => greeting.kill();
+  }, [isNearReader]);
 
   useFrame(({ clock }, delta) => {
     if (!root.current || !body.current) return;
@@ -1919,7 +3112,7 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
     const input = movement.current;
     const horizontal = Number(input.right) - Number(input.left);
     const vertical = Number(input.backward) - Number(input.forward);
-    const moving = !portalTransitioning && (horizontal !== 0 || vertical !== 0);
+    const moving = horizontal !== 0 || vertical !== 0;
 
     if (moving) {
       direction.set(horizontal, 0, vertical).normalize();
@@ -1927,27 +3120,31 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
       root.current.position.x += direction.x * speed * delta;
       root.current.position.z += direction.z * speed * delta;
       const localZ = root.current.position.z - 1;
-      const path = pathCenter(localZ);
-      const branchAvailable = localZ >= -8.5 && localZ <= 2.7;
-      if (branchAvailable) {
-        const branchCenter = branchTrailCenterX(localZ);
-        const mainMin = path - 2.45;
-        const mainMax = path + 2.45;
-        const branchMin = branchCenter - 1.5;
-        const branchMax = branchCenter + 1.5;
-        const inMainTrail = root.current.position.x >= mainMin && root.current.position.x <= mainMax;
-        const inBranchTrail = root.current.position.x >= branchMin && root.current.position.x <= branchMax;
-        if (!inMainTrail && !inBranchTrail) {
-          const mainX = THREE.MathUtils.clamp(root.current.position.x, mainMin, mainMax);
-          const branchX = THREE.MathUtils.clamp(root.current.position.x, branchMin, branchMax);
-          root.current.position.x = Math.abs(root.current.position.x - branchX) < Math.abs(root.current.position.x - mainX)
-            ? branchX
-            : mainX;
-        }
-      } else {
-        root.current.position.x = THREE.MathUtils.clamp(root.current.position.x, path - 2.45, path + 2.45);
+      const trailBounds = [{ center: pathCenter(localZ), halfWidth: 2.45 }];
+      if (localZ >= -10.5 && localZ <= 2.7) {
+        trailBounds.push({ center: branchTrailCenterX(localZ), halfWidth: 1.5 });
       }
-      root.current.position.z = THREE.MathUtils.clamp(root.current.position.z, -15, 13);
+      if (localZ >= -23.8 && localZ <= 2.7) {
+        trailBounds.push({ center: cabinTrailCenterX(localZ), halfWidth: 1.5 });
+      }
+      const isOnTrail = trailBounds.some(({ center, halfWidth }) => (
+        root.current.position.x >= center - halfWidth
+        && root.current.position.x <= center + halfWidth
+      ));
+      if (!isOnTrail) {
+        root.current.position.x = trailBounds
+          .map(({ center, halfWidth }) => THREE.MathUtils.clamp(
+            root.current.position.x,
+            center - halfWidth,
+            center + halfWidth,
+          ))
+          .reduce((closest, candidate) => (
+            Math.abs(root.current.position.x - candidate) < Math.abs(root.current.position.x - closest)
+              ? candidate
+              : closest
+          ));
+      }
+      root.current.position.z = THREE.MathUtils.clamp(root.current.position.z, -22.8, 13);
       root.current.position.y = terrainHeight(root.current.position.x, root.current.position.z - 1);
       const targetYaw = Math.atan2(-direction.x, -direction.z);
       const yawDifference = Math.atan2(
@@ -1956,19 +3153,43 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
       );
       root.current.rotation.y += yawDifference * (1 - Math.exp(-delta * 8));
       if (walkStartedAt.current == null) walkStartedAt.current = time;
-      const onCreekBranch = branchAvailable
-        && Math.abs(root.current.position.x - branchTrailCenterX(localZ)) <= 1.8;
-      if (
-        !portalTriggered.current
-        && !onCreekBranch
-        && root.current.position.z <= -5.7
-        && Math.abs(root.current.position.x) <= 2.3
-      ) {
-        portalTriggered.current = true;
-        onPortalEnter?.();
-      }
     } else {
       walkStartedAt.current = null;
+    }
+
+    const localZ = root.current.position.z - 1;
+    const branchAvailable = localZ >= -10.5 && localZ <= 2.7;
+    const onCreekBranch = branchAvailable
+      && Math.abs(root.current.position.x - branchTrailCenterX(localZ)) <= 1.8;
+    const onCabinTrail = localZ >= -23.8 && localZ <= 2.7
+      && Math.abs(root.current.position.x - cabinTrailCenterX(localZ)) <= 1.8;
+    const isNearCabin = Math.hypot(
+      root.current.position.x - 11.1,
+      localZ + 8.4,
+    ) <= 5.2;
+    const readerLocalZ = READER_POSITION.z - 1;
+    const isNearReader = Math.hypot(
+      root.current.position.x - READER_POSITION.x,
+      localZ - readerLocalZ,
+    ) <= 3.1;
+    const isAtSummit = Math.hypot(
+      root.current.position.x - MOUNTAIN_SUMMIT.x,
+      localZ - MOUNTAIN_SUMMIT.z,
+    ) <= 2.1;
+    const isNearPortal = !onCreekBranch && !onCabinTrail
+      && root.current.position.z <= -5.7
+      && Math.abs(root.current.position.x) <= 2.3;
+    const hasMoved = Math.hypot(root.current.position.x - 0.52, root.current.position.z - 3.5) > 0.55;
+    const previousState = previousJourneyState.current;
+    if (
+      previousState.hasMoved !== hasMoved
+      || previousState.isNearPortal !== isNearPortal
+      || previousState.isNearCabin !== isNearCabin
+      || previousState.isNearReader !== isNearReader
+      || previousState.isAtSummit !== isAtSummit
+    ) {
+      previousJourneyState.current = { hasMoved, isNearPortal, isNearCabin, isNearReader, isAtSummit };
+      onJourneyStateChange?.({ hasMoved, isNearPortal, isNearCabin, isNearReader, isAtSummit });
     }
 
     const walkTime = walkStartedAt.current == null ? time * 0.35 : (time - walkStartedAt.current) * 9;
@@ -1982,22 +3203,40 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
     if (rightLeg.current) rightLeg.current.rotation.x = moving ? -step * walkAmplitude : 0;
     if (leftArm.current) leftArm.current.rotation.x = moving ? -step * walkAmplitude * 0.6 : 0;
     if (rightArm.current) rightArm.current.rotation.x = moving ? step * walkAmplitude * 0.52 : 0;
+    if (!isNearReader) {
+      if (leftArm.current) {
+        leftArm.current.rotation.z = THREE.MathUtils.damp(
+          leftArm.current.rotation.z,
+          isAtSummit ? 0.34 : 0,
+          3,
+          delta,
+        );
+      }
+      if (rightArm.current) {
+        rightArm.current.rotation.z = THREE.MathUtils.damp(
+          rightArm.current.rotation.z,
+          isAtSummit ? -0.34 : 0,
+          3,
+          delta,
+        );
+      }
+    }
     if (hair.current) {
       const sway = moving ? step * (reducedMotion ? 0.025 : 0.075) : Math.sin(time * 0.8) * 0.018;
       hair.current.rotation.z = THREE.MathUtils.damp(hair.current.rotation.z, sway, 5, delta);
     }
 
-    if (time > 2.4 && !portalTransitioning) {
+    if (time > 2.4) {
       desiredCameraPosition.set(
         root.current.position.x,
-        root.current.position.y + 5.2,
-        root.current.position.z + 10.5,
+        root.current.position.y + (isAtSummit ? 7.6 : 5.2),
+        root.current.position.z + (isAtSummit ? 13.5 : 10.5),
       );
       camera.position.lerp(desiredCameraPosition, 1 - Math.exp(-delta * 1.15));
       cameraTarget.set(
         root.current.position.x,
-        root.current.position.y + 1.4,
-        root.current.position.z - 3,
+        root.current.position.y + (isAtSummit ? 1.9 : 1.4),
+        root.current.position.z - (isAtSummit ? 4.8 : 3),
       );
       camera.lookAt(cameraTarget);
     }
@@ -2010,6 +3249,43 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
           <primitive object={dressGeometry} attach="geometry" />
           <primitive object={fabricMaterial} attach="material" />
         </mesh>
+        <mesh geometry={strapGeometry} material={strapMaterial} castShadow />
+        <mesh geometry={backStrapGeometry} material={strapMaterial} castShadow />
+        {strapStitchGeometries.map((geometry, index) => (
+          <mesh key={index} geometry={geometry} material={stitchMaterial} />
+        ))}
+        <group position={[0.24, 1.49, -0.35]} rotation={[0, 0, -0.2]}>
+          <mesh position={[-0.049, 0, 0]} material={claspMaterial}>
+            <boxGeometry args={[0.012, 0.11, 0.018]} />
+          </mesh>
+          <mesh position={[0.049, 0, 0]} material={claspMaterial}>
+            <boxGeometry args={[0.012, 0.11, 0.018]} />
+          </mesh>
+          <mesh position={[0, 0.049, 0]} material={claspMaterial}>
+            <boxGeometry args={[0.1, 0.012, 0.018]} />
+          </mesh>
+          <mesh position={[0, -0.049, 0]} material={claspMaterial}>
+            <boxGeometry args={[0.1, 0.012, 0.018]} />
+          </mesh>
+          <mesh position={[0, 0, 0.01]} material={claspMaterial}>
+            <boxGeometry args={[0.014, 0.072, 0.022]} />
+          </mesh>
+        </group>
+        <group position={[-0.3, 0.99, -0.37]}>
+          <mesh geometry={leatherGeometry} material={bagMaterial} castShadow receiveShadow />
+          <group position={[0, 0.19, -0.03]}>
+            <mesh geometry={flapGeometry} material={bagMaterial} castShadow receiveShadow />
+            <mesh position={[0, -0.105, -0.048]} material={claspMaterial}>
+              <boxGeometry args={[0.13, 0.022, 0.016]} />
+            </mesh>
+            <mesh position={[0, -0.13, -0.054]} material={claspMaterial} castShadow>
+              <boxGeometry args={[0.052, 0.044, 0.025]} />
+            </mesh>
+            <mesh position={[0, -0.13, -0.071]} material={bagMaterial}>
+              <boxGeometry args={[0.018, 0.064, 0.008]} />
+            </mesh>
+          </group>
+        </group>
         <mesh position={[0, 1.96, -0.045]} scale={[0.92, 1.02, 0.9]} castShadow>
           <sphereGeometry args={[0.23, 20, 16]} />
           <meshStandardMaterial color="#e3b49b" roughness={0.75} />
@@ -2027,24 +3303,38 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
 
         <group ref={leftLeg} position={[-0.19, 0.54, 0]}>
           <Limb position={[0, -0.27, 0]} color="#49352e" radius={0.095} length={0.48} />
-          <mesh position={[0, -0.54, 0.08]} rotation={[0, 0, 0]} castShadow>
-            <capsuleGeometry args={[0.1, 0.2, 4, 8]} />
-            <meshStandardMaterial color="#68452f" roughness={0.74} />
-          </mesh>
+          <group position={[0, -0.55, -0.03]}>
+            <Sneaker
+              upperMaterial={sneakerMaterials.upper}
+              soleMaterial={sneakerMaterials.sole}
+              laceMaterial={sneakerMaterials.lace}
+              sideMaterial={sneakerMaterials.accent}
+            />
+          </group>
         </group>
         <group ref={rightLeg} position={[0.19, 0.54, 0]}>
           <Limb position={[0, -0.27, 0]} color="#49352e" radius={0.095} length={0.48} />
-          <mesh position={[0, -0.54, 0.08]} castShadow>
-            <capsuleGeometry args={[0.1, 0.2, 4, 8]} />
-            <meshStandardMaterial color="#68452f" roughness={0.74} />
-          </mesh>
+          <group position={[0, -0.55, -0.03]}>
+            <Sneaker
+              upperMaterial={sneakerMaterials.upper}
+              soleMaterial={sneakerMaterials.sole}
+              laceMaterial={sneakerMaterials.lace}
+              sideMaterial={sneakerMaterials.accent}
+            />
+          </group>
         </group>
 
         <group ref={leftArm} position={[-0.3, 1.58, 0]}>
           <Limb position={[-0.13, -0.31, 0.015]} rotation={[0, 0, -0.18]} color="#e4ddd0" radius={0.105} length={0.55} />
+          <group position={[-0.13, -0.76, 0.025]} rotation={[0, 0, -0.06]}>
+            <Hand material={handMaterial} />
+          </group>
         </group>
         <group ref={rightArm} position={[0.3, 1.58, 0]}>
           <Limb position={[0.14, -0.27, 0.03]} rotation={[0, 0, 0.22]} color="#e4ddd0" radius={0.105} length={0.55} />
+          <group position={[0.14, -0.76, 0.045]} rotation={[0, 0, 0.06]}>
+            <Hand mirror={-1} material={handMaterial} />
+          </group>
           <mesh position={[0.14, -0.48, 0.03]} rotation={[Math.PI / 2, 0, 0]} castShadow>
             <torusGeometry args={[0.112, 0.014, 8, 28]} />
             <meshStandardMaterial color="#d6b56f" metalness={0.72} roughness={0.32} />
@@ -2054,85 +3344,6 @@ function Walker({ reducedMotion, movement, portalTransitioning, onPortalEnter })
           <StrawHat />
         </group>
       </group>
-    </group>
-  );
-}
-
-function ButterflyStardust({ positionRef, reducedMotion }) {
-  const particleRefs = useRef([]);
-  const elapsedSinceEmission = useRef(0);
-  const nextParticle = useRef(0);
-  const particleState = useMemo(() => Array.from({ length: BUTTERFLY_PARTICLE_COUNT }, (_, index) => ({
-      life: 0.65 + (index % 5) * 0.08,
-      velocity: new THREE.Vector3(
-        Math.sin(index * 17.13) * 0.65,
-        0.35 + (index % 4) * 0.06,
-        0.2 + Math.cos(index * 11.71) * 0.38,
-      ),
-      size: 0.65 + (index % 4) * 0.12,
-      warm: index % 2 === 0,
-    })), []);
-  const ages = useRef(null);
-  if (ages.current == null) ages.current = new Float32Array(BUTTERFLY_PARTICLE_COUNT).fill(2);
-  const geometry = useMemo(() => new THREE.SphereGeometry(0.14, 7, 6), []);
-  const materials = useMemo(() => particleState.map((particle) => new THREE.MeshBasicMaterial({
-    color: particle.warm ? '#ffc87a' : '#d9f7ff',
-    transparent: true,
-    opacity: 0,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    toneMapped: false,
-  })), [particleState]);
-
-  useEffect(() => () => {
-    geometry.dispose();
-    materials.forEach((material) => material.dispose());
-  }, [geometry, materials]);
-
-  useFrame((_, delta) => {
-    if (!reducedMotion && positionRef.current.lengthSq() > 0) {
-      elapsedSinceEmission.current += delta;
-      if (elapsedSinceEmission.current >= 0.045) {
-        elapsedSinceEmission.current = 0;
-        const index = nextParticle.current;
-        ages.current[index] = 0;
-        particleRefs.current[index]?.position.copy(positionRef.current);
-        if (particleRefs.current[index]) particleRefs.current[index].visible = true;
-        nextParticle.current = (index + 1) % BUTTERFLY_PARTICLE_COUNT;
-      }
-    }
-
-    particleState.forEach((particle, index) => {
-      const mesh = particleRefs.current[index];
-      if (!mesh) return;
-      if (ages.current[index] < particle.life) {
-        ages.current[index] += delta;
-        const progress = Math.min(1, ages.current[index] / particle.life);
-        const opacity = (1 - progress) ** 1.8;
-        mesh.position.addScaledVector(particle.velocity, delta);
-        mesh.scale.setScalar(particle.size * (1 - progress * 0.72));
-        mesh.material.opacity = opacity * 0.82;
-        mesh.visible = true;
-      } else {
-        mesh.visible = false;
-        mesh.material.opacity = 0;
-      }
-    });
-  });
-
-  return (
-    <group>
-      {particleState.map((particle, index) => (
-        <mesh
-          key={index}
-          ref={(mesh) => { particleRefs.current[index] = mesh; }}
-          geometry={geometry}
-          material={materials[index]}
-          visible={false}
-          scale={particle.size}
-          renderOrder={2}
-        />
-      ))}
     </group>
   );
 }
@@ -2163,68 +3374,25 @@ function CameraArrival({ reducedMotion }) {
   return null;
 }
 
-function PortalTravel({ active, reducedMotion, onComplete }) {
-  const { camera } = useThree();
-  const target = useMemo(() => new THREE.Vector3(0, 3.1, -24), []);
-
-  useEffect(() => {
-    if (!active) return undefined;
-    if (reducedMotion) {
-      camera.position.set(0, 3.1, -12);
-      camera.lookAt(target);
-      onComplete();
-      return undefined;
-    }
-
-    const timeline = gsap.timeline({ onComplete });
-    timeline
-      .to(camera.position, {
-        x: 0,
-        y: 3.1,
-        z: -12.5,
-        duration: 1.8,
-        ease: 'power3.in',
-        onUpdate: () => camera.lookAt(target),
-      })
-      .to(camera, {
-        fov: 27,
-        duration: 0.9,
-        ease: 'power2.in',
-        onUpdate: () => {
-          camera.lookAt(target);
-          camera.updateProjectionMatrix();
-        },
-      }, 0.9);
-
-    return () => timeline.kill();
-  }, [active, camera, onComplete, reducedMotion, target]);
-
-  return null;
-}
-
 function RealWorldScene({
   reducedMotion,
   audioLevel,
   movement,
-  portalTransitioning,
+  journeyState,
+  onJourneyStateChange,
   onPortalEnter,
-  onPortalComplete,
 }) {
-  const butterflyPosition = useRef(new THREE.Vector3());
-  const updateButterflyPosition = useCallback((position) => {
-    butterflyPosition.current.copy(position);
-  }, []);
-
   return (
     <>
-      <color attach="background" args={['#6b9aab']} />
+      <color attach="background" args={['#6f475f']} />
       <SkyDome reducedMotion={reducedMotion} />
       <AtmosphericClouds reducedMotion={reducedMotion} />
-      <ambientLight intensity={0.7} color="#d9e8ed" />
+      <SkyBird reducedMotion={reducedMotion} />
+      <ambientLight intensity={0.58} color="#ffd0a2" />
       <directionalLight
-        position={[-7, 12, 8]}
-        intensity={2.6}
-        color="#ffe4b0"
+        position={[-14, 8, -20]}
+        intensity={3.1}
+        color="#ffbd78"
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
@@ -2234,32 +3402,31 @@ function RealWorldScene({
         shadow-camera-bottom={-18}
         shadow-bias={-0.0002}
       />
-      <hemisphereLight args={['#9bcbe0', '#60422e', 0.5]} />
+      <hemisphereLight args={['#db9bb0', '#473243', 0.72]} />
 
-      <Terrain reducedMotion={reducedMotion} />
-      <Portal reducedMotion={reducedMotion} onEnterGalaxy={onPortalEnter} />
+      <Terrain reducedMotion={reducedMotion} dogActive={journeyState.isNearCabin} />
+      <ForestReader greeting={journeyState.isNearReader} reducedMotion={reducedMotion} />
+      <Portal
+        reducedMotion={reducedMotion}
+        canEnterGalaxy={journeyState.isNearPortal}
+        onEnterGalaxy={onPortalEnter}
+      />
       <Walker
         reducedMotion={reducedMotion}
         movement={movement}
-        portalTransitioning={portalTransitioning}
-        onPortalEnter={onPortalEnter}
+        isNearReader={journeyState.isNearReader}
+        onJourneyStateChange={onJourneyStateChange}
       />
-      <PortalTravel
-        active={portalTransitioning}
-        reducedMotion={reducedMotion}
-        onComplete={onPortalComplete}
-      />
-      <Butterfly
-        isEntered
-        audioLevel={audioLevel}
-        reducedMotion={reducedMotion}
-        anchorPosition={[1.1, 2.4, 2.1]}
-        cursorFollow
-        scaleMultiplier={3.2}
-        onPositionUpdate={updateButterflyPosition}
-      />
-      <ButterflyStardust positionRef={butterflyPosition} reducedMotion={reducedMotion} />
-      <fog attach="fog" args={['#b3c9c5', 23, 68]} />
+      <ButterflyGuide audioLevel={audioLevel} reducedMotion={reducedMotion} />
+      <fog attach="fog" args={['#bd8292', 23, 70]} />
+      <EffectComposer multisampling={0}>
+        <Bloom
+          intensity={journeyState.isNearPortal ? 0.9 : 0.42}
+          luminanceThreshold={0.78}
+          luminanceSmoothing={0.22}
+          mipmapBlur
+        />
+      </EffectComposer>
     </>
   );
 }
@@ -2267,8 +3434,13 @@ function RealWorldScene({
 export default function RealWorldCollage({ onEnterGalaxy }) {
   const shouldReduceMotion = useReducedMotion();
   const { audioLevel } = useAppAudio();
-  const [portalTransitioning, setPortalTransitioning] = useState(false);
-  const hasStartedPortalTransition = useRef(false);
+  const [journeyState, setJourneyState] = useState({
+    hasMoved: false,
+    isNearPortal: false,
+    isNearCabin: false,
+    isNearReader: false,
+    isAtSummit: false,
+  });
   const movement = useRef({
     forward: false,
     backward: false,
@@ -2276,13 +3448,20 @@ export default function RealWorldCollage({ onEnterGalaxy }) {
     right: false,
     sprint: false,
   });
-  const beginPortalTransition = useCallback(() => {
-    if (hasStartedPortalTransition.current) return;
-    hasStartedPortalTransition.current = true;
-    setPortalTransitioning(true);
-  }, []);
-  const finishPortalTransition = useCallback(() => {
-    onEnterGalaxy?.();
+  const handleJourneyStateChange = useCallback((nextState) => {
+    if (nextState.isNearPortal) {
+      onEnterGalaxy?.();
+      return;
+    }
+    setJourneyState((currentState) => (
+      currentState.hasMoved === nextState.hasMoved
+      && currentState.isNearPortal === nextState.isNearPortal
+      && currentState.isNearCabin === nextState.isNearCabin
+      && currentState.isNearReader === nextState.isNearReader
+      && currentState.isAtSummit === nextState.isAtSummit
+        ? currentState
+        : nextState
+    ));
   }, [onEnterGalaxy]);
 
   useEffect(() => {
@@ -2324,6 +3503,19 @@ export default function RealWorldCollage({ onEnterGalaxy }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!journeyState.isNearPortal) return undefined;
+    const handleJump = (event) => {
+      if (event.code !== 'Space' || event.repeat) return;
+      const activeElement = document.activeElement;
+      if (activeElement?.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeElement?.tagName)) return;
+      event.preventDefault();
+      onEnterGalaxy?.();
+    };
+    window.addEventListener('keydown', handleJump);
+    return () => window.removeEventListener('keydown', handleJump);
+  }, [journeyState.isNearPortal, onEnterGalaxy]);
+
   const movementButton = (direction, label, glyph, extraClasses = '') => (
     <button
       key={direction}
@@ -2346,7 +3538,7 @@ export default function RealWorldCollage({ onEnterGalaxy }) {
     <motion.section
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      exit={{ opacity: 0, transition: { duration: shouldReduceMotion ? 0 : 0.22, ease: 'easeOut' } }}
       transition={{ duration: shouldReduceMotion ? 0 : 0.8, ease: 'easeOut' }}
       className="fixed inset-0 z-[110] overflow-hidden bg-[#152735] text-white"
       aria-label="Mundo real: camino entre el cielo y el universo"
@@ -2362,12 +3554,20 @@ export default function RealWorldCollage({ onEnterGalaxy }) {
           reducedMotion={shouldReduceMotion}
           audioLevel={audioLevel}
           movement={movement}
-          portalTransitioning={portalTransitioning}
-          onPortalEnter={beginPortalTransition}
-          onPortalComplete={finishPortalTransition}
+          journeyState={journeyState}
+          onJourneyStateChange={handleJourneyStateChange}
+          onPortalEnter={onEnterGalaxy}
         />
       </Canvas>
 
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute left-[18%] top-[27%] z-[1] aspect-square w-[clamp(5rem,11vw,9rem)] rounded-full mix-blend-screen"
+        style={{
+          backgroundImage: 'radial-gradient(circle, rgba(255, 246, 220, 0.88) 0%, rgba(255, 190, 125, 0.56) 24%, rgba(239, 107, 104, 0.2) 48%, transparent 74%)',
+          filter: 'blur(1px)',
+        }}
+      />
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0"
@@ -2385,15 +3585,36 @@ export default function RealWorldCollage({ onEnterGalaxy }) {
         }}
       />
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#07121b]/15 via-transparent to-[#130e08]/20" />
-      <motion.div
-        aria-hidden="true"
-        animate={{ opacity: portalTransitioning ? 1 : 0 }}
-        transition={{ duration: shouldReduceMotion ? 0 : 0.8, ease: 'easeIn' }}
-        className="pointer-events-none absolute inset-0 z-[115] bg-[radial-gradient(ellipse_at_center,rgba(210,241,255,0.98)_0%,rgba(114,176,255,0.72)_22%,rgba(14,33,65,0)_68%)]"
-      />
-      <p className="pointer-events-none absolute bottom-6 left-6 hidden rounded-full border border-white/20 bg-black/25 px-4 py-2 font-mono text-[9px] tracking-[0.16em] text-white/75 backdrop-blur-md sm:block">
-        WASD / FLECHAS PARA CAMINAR · SHIFT PARA CORRER · SENDERO IZQUIERDO AL ARROYO
-      </p>
+      <motion.p
+        id="portal-guidance"
+        key={[
+          journeyState.isNearPortal,
+          journeyState.isNearCabin,
+          journeyState.isNearReader,
+          journeyState.isAtSummit,
+          journeyState.hasMoved,
+        ].join('-')}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: shouldReduceMotion ? 0 : 0.25 }}
+        aria-live="polite"
+        className="pointer-events-none absolute bottom-[13.5rem] left-1/2 z-10 w-[min(88vw,24rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-[#07121b]/75 px-3 py-2 text-center font-mono text-[9px] leading-relaxed tracking-wide text-white/80 shadow-lg backdrop-blur-md sm:bottom-6 sm:left-6 sm:w-auto sm:translate-x-0 sm:rounded-full sm:px-4"
+      >
+        {journeyState.isNearPortal
+          ? 'EL PORTAL ESTÁ CERCA · PULSA ESPACIO PARA SALTAR AL UNIVERSO'
+          : journeyState.isAtSummit
+            ? 'CUMBRE · DETENTE Y CONTEMPLA EL ATARDECER SOBRE EL BOSQUE'
+          : journeyState.isNearReader
+            ? 'RÍO · EL LECTOR LEVANTA LA VISTA Y TE DEVUELVE EL SALUDO'
+            : journeyState.isNearCabin
+              ? 'LA PUERTA SE ABRE · UN AMIGO PELUDO SALE A RECIBIRTE'
+          : journeyState.hasMoved
+                ? 'EL SENDERO RODEA LA CASITA Y SE ADENTRA EN EL BOSQUE · HAY ALGUIEN LEYENDO JUNTO AL RÍO'
+                : 'USA WASD O LAS FLECHAS · SIGUE EL SENDERO HACIA LA CASITA Y EL BOSQUE'}
+        {!journeyState.isNearPortal && !journeyState.isNearCabin && !journeyState.isNearReader && !journeyState.isAtSummit && !journeyState.hasMoved && (
+          <span className="hidden sm:inline"> · SHIFT PARA CORRER</span>
+        )}
+      </motion.p>
       <div className="absolute bottom-5 left-1/2 grid -translate-x-1/2 grid-cols-3 gap-1.5 sm:hidden" aria-label="Controles para caminar">
         <span />
         {movementButton('forward', 'Caminar hacia adelante', '↑')}
@@ -2402,19 +3623,48 @@ export default function RealWorldCollage({ onEnterGalaxy }) {
         {movementButton('backward', 'Caminar hacia atrás', '↓')}
         {movementButton('right', 'Caminar hacia la derecha', '→')}
       </div>
-      <div className="absolute inset-x-0 top-0 flex items-center justify-between p-4 sm:p-7">
-        <p className="rounded-full border border-white/25 bg-black/25 px-4 py-2 font-mono text-[9px] tracking-[0.24em] text-white/80 backdrop-blur-md sm:text-[10px]">
-          MUNDO REAL · 01
-        </p>
-        <button
-          type="button"
-          data-cursor
-          onClick={beginPortalTransition}
-          disabled={portalTransitioning}
-          className="min-h-11 border border-white/35 bg-black/30 px-4 py-2 font-mono text-[9px] tracking-[0.12em] text-white shadow-[0_0_24px_rgba(255,255,255,0.08)] backdrop-blur-md transition hover:border-white/75 hover:bg-black/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:text-[10px]"
+      <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-7">
+        <section
+          aria-label="Identidad de Gaby"
+          className="max-w-[min(62vw,22rem)] border border-white/15 bg-[#07121b]/65 px-3 py-2.5 font-mono shadow-lg backdrop-blur-xl sm:max-w-sm sm:px-4 sm:py-3"
         >
-          ATRAVESAR EL PORTAL →
-        </button>
+          <p className="mb-1 text-[7px] uppercase tracking-[0.2em] text-amber-100/65 sm:text-[8px]">
+            {journeyState.isNearPortal
+              ? 'Portal · destino disponible'
+              : journeyState.isAtSummit
+                ? 'Cumbre · hora dorada'
+              : journeyState.isNearReader
+                ? 'Río · rincón de lectura'
+                : journeyState.isNearCabin
+                  ? 'Refugio · la casita'
+                  : 'Mundo real · 01'}
+          </p>
+          <h1 className="text-[12px] tracking-[0.12em] text-white sm:text-base">
+            Gaby Edwin <span className="text-amber-100/70">_</span>
+          </h1>
+          <p className="mt-1 text-[8px] tracking-[0.06em] text-white/75 sm:text-[10px] sm:tracking-[0.1em]">
+            Frontend Developer &amp; Arte Digital
+          </p>
+        </section>
+        <AnimatePresence>
+          {journeyState.isNearPortal && (
+            <motion.button
+              type="button"
+              data-cursor
+              onClick={onEnterGalaxy}
+              aria-label="Entrar al portal y descubrir la galaxia"
+              aria-describedby="portal-guidance"
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
+              className="min-h-11 shrink-0 border border-cyan-100/40 bg-[#07121b]/75 px-3 py-2 font-mono text-[9px] tracking-[0.08em] text-cyan-50 shadow-lg backdrop-blur-xl transition hover:border-cyan-100/75 hover:bg-[#10233a]/85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-70 sm:px-4 sm:text-[10px]"
+            >
+              <span className="sm:hidden">SALTAR →</span>
+              <span className="hidden sm:inline">SALTAR AL UNIVERSO →</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
     </motion.section>
   );

@@ -5,9 +5,10 @@ import { useAppAudio } from './audio/AudioContext';
 import { AudioProvider } from './audio/AudioProvider';
 import CustomCursor from './components/CustomCursor';
 import IntroSplash from './components/IntroSplash';
-import RealWorldCollage from './components/RealWorldCollage';
 
-const Galaxia = lazy(() => import('./components/src/components/Galaxia'));
+const loadGalaxia = () => import('./components/src/components/Galaxia');
+const Galaxia = lazy(loadGalaxia);
+const RealWorldCollage = lazy(() => import('./components/RealWorldCollage'));
 
 export default function App() {
   return (
@@ -50,27 +51,37 @@ function PortfolioApp() {
 
   const beginLandingTransition = useCallback(() => {
     void startAudio();
+    void loadGalaxia().catch((error) => {
+      console.error('No se pudo precargar la vista de la galaxia.', error);
+    });
     transitionTo('realWorld');
   }, [startAudio, transitionTo]);
+  const enterGalaxy = useCallback(() => {
+    gsap.killTweensOf(transitionOverlay.current);
+    if (transitionOverlay.current) transitionOverlay.current.style.opacity = '0';
+    transitionInProgress.current = false;
+    setAppState('galaxy');
+  }, []);
 
   return (
     <main className="relative h-screen w-full select-none overflow-hidden bg-[#030008]">
-      <AnimatePresence mode="wait" onExitComplete={finishTransition}>
+      <AnimatePresence mode="sync" onExitComplete={finishTransition}>
         {appState === 'landing' && (
           <IntroSplash
             key="landing"
-            onEnter={() => transitionTo('realWorld')}
-            onLoadingStart={beginLandingTransition}
+            onEnter={beginLandingTransition}
           />
         )}
         {appState === 'realWorld' && (
-          <RealWorldCollage
-            key="real-world"
-            onEnterGalaxy={() => transitionTo('galaxy')}
-          />
+          <Suspense key="real-world-loading" fallback={null}>
+            <RealWorldCollage
+              key="real-world"
+              onEnterGalaxy={enterGalaxy}
+            />
+          </Suspense>
         )}
         {appState === 'galaxy' && (
-          <Suspense key="galaxy-loading" fallback={<div className="fixed inset-0 bg-[#030008]" aria-hidden="true" />}>
+          <Suspense key="galaxy-loading" fallback={null}>
             <Galaxia
               key="galaxy"
               isEntered
