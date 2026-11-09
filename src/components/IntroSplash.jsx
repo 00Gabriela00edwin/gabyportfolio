@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { useAppAudio } from '../audio/AudioContext';
 import StarTrail from './StarTrail';
@@ -6,8 +6,32 @@ import StarTrail from './StarTrail';
 const IntroButterflyCanvas = lazy(() => import('./IntroButterflyCanvas'));
 
 export default function IntroSplash({ onEnter }) {
-  const { audioLevel } = useAppAudio();
+  const { audioLevel, startIntroAudio } = useAppAudio();
   const shouldReduceMotion = useReducedMotion();
+  const [showButterfly, setShowButterfly] = useState(false);
+
+  useEffect(() => {
+    startIntroAudio();
+  }, [startIntroAudio]);
+
+  useEffect(() => {
+    if (shouldReduceMotion) return undefined;
+
+    let idleCallbackId;
+    let fallbackTimeoutId;
+    if (typeof window.requestIdleCallback === 'function') {
+      idleCallbackId = window.requestIdleCallback(() => setShowButterfly(true), { timeout: 1200 });
+    } else {
+      fallbackTimeoutId = window.setTimeout(() => setShowButterfly(true), 500);
+    }
+
+    return () => {
+      if (idleCallbackId !== undefined && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleCallbackId);
+      }
+      if (fallbackTimeoutId !== undefined) window.clearTimeout(fallbackTimeoutId);
+    };
+  }, [shouldReduceMotion]);
 
   return (
     <motion.div
@@ -32,18 +56,20 @@ export default function IntroSplash({ onEnter }) {
 
       <StarTrail />
 
-      <Suspense fallback={null}>
-        <IntroButterflyCanvas
-          audioLevel={audioLevel}
-          reducedMotion={Boolean(shouldReduceMotion)}
-        />
-      </Suspense>
+      {showButterfly && !shouldReduceMotion && (
+        <Suspense fallback={null}>
+          <IntroButterflyCanvas
+            audioLevel={audioLevel}
+            reducedMotion={Boolean(shouldReduceMotion)}
+          />
+        </Suspense>
+      )}
 
       <button
         type="button"
         data-cursor
         onClick={onEnter}
-        className="absolute bottom-8 left-1/2 z-10 min-h-11 -translate-x-1/2 whitespace-nowrap border border-white/20 bg-black/35 px-5 py-3 font-mono text-[9px] font-light tracking-[0.16em] text-white/75 backdrop-blur-md transition duration-300 hover:border-cyan-100/55 hover:text-cyan-50 hover:shadow-[0_0_30px_rgba(103,232,249,0.18)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-100 sm:bottom-10 sm:px-7 sm:text-[10px]"
+        className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap border border-cyan-100/30 bg-[#030816]/60 px-6 py-3 font-mono text-[10px] font-medium tracking-[0.22em] text-cyan-50/90 backdrop-blur-sm transition duration-300 hover:border-cyan-100/60 hover:bg-[#071628]/80 hover:shadow-[0_0_22px_rgba(103,232,249,0.12)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-100 sm:px-8 sm:text-[11px]"
       >
         [ INGRESA A MI UNIVERSO ]
       </button>

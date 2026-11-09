@@ -1,9 +1,11 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { Billboard, OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import { Bloom, ChromaticAberration, EffectComposer } from '@react-three/postprocessing';
 import { AnimatePresence, motion } from 'framer-motion';
+import { LocateFixed, Pause, Play, Sparkles } from 'lucide-react';
 import gsap from 'gsap';
+import AudioToggleButton from '../../../audio/AudioToggleButton';
 import {
   AdditiveBlending,
   BackSide,
@@ -12,8 +14,12 @@ import {
   Color,
   DoubleSide,
   Float32BufferAttribute,
+  Matrix4,
+  MeshBasicMaterial,
   PlaneGeometry,
+  Quaternion,
   SRGBColorSpace,
+  SphereGeometry,
   TextureLoader,
   Vector2,
   Vector3,
@@ -21,7 +27,14 @@ import {
 import { useAppAudio } from '../../../audio/AudioContext';
 import Butterfly from '../../Butterfly';
 
-const CHROMATIC_ABERRATION_OFFSET = new Vector2(0.00025, 0.00025);
+const CHROMATIC_ABERRATION_OFFSET = new Vector2(0.0001, 0.0001);
+const MODULE_LABELS = {
+  NUCLEO: 'Perfil & Stack',
+  PROYECTOS: 'Proyectos',
+  ASTROFOTOS: 'Astrofotografía',
+  CREDENCIALES: 'Formación y certificaciones',
+  CONTACTO: 'Contacto',
+};
 const PROJECTS = [
   {
     title: 'Nowin Especias',
@@ -54,102 +67,6 @@ const staggerContainerVariants = {
   hidden: {},
   visible: { transition: { delayChildren: 0.06, staggerChildren: 0.075 } },
 };
-
-function createProjectOrbitTexture(project, index) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 320;
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('No se pudo crear la textura de la tarjeta de proyecto.');
-
-  context.fillStyle = '#07101d';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = `${project.accent}bb`;
-  context.lineWidth = 3;
-  context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
-  context.fillStyle = `${project.accent}22`;
-  context.fillRect(16, 16, canvas.width - 32, 52);
-  context.fillStyle = project.accent;
-  context.font = 'bold 18px monospace';
-  context.fillText(`PROYECTO  /  0${index + 1}`, 30, 48);
-  context.fillStyle = '#f8fafc';
-  context.font = 'bold 32px sans-serif';
-  context.fillText(project.title, 30, 132, 445);
-  context.fillStyle = '#b8c7d9';
-  context.font = '20px monospace';
-  context.fillText(project.category.toUpperCase(), 32, 174, 440);
-  context.fillStyle = '#cbd5e1';
-  context.font = '17px sans-serif';
-  context.fillText(project.technologies.slice(0, 3).join('  ·  '), 32, 270, 440);
-  context.fillStyle = project.accent;
-  context.fillRect(32, 292, 120, 3);
-
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  texture.anisotropy = 8;
-  return texture;
-}
-
-function ProjectOrbitCards({ paused, onSelect, onPointerOver, onPointerOut }) {
-  const orbitRef = useRef(null);
-  const cards = useMemo(() => PROJECTS.map((project, index) => {
-    const geometry = new PlaneGeometry(1.35, 0.88, 16, 8);
-    const positions = geometry.attributes.position;
-    for (let vertex = 0; vertex < positions.count; vertex += 1) {
-      const x = positions.getX(vertex);
-      positions.setZ(vertex, 0.07 * (1 - (x / 0.675) ** 2));
-    }
-    positions.needsUpdate = true;
-    geometry.computeVertexNormals();
-    return { geometry, texture: createProjectOrbitTexture(project, index) };
-  }), []);
-
-  useEffect(() => () => {
-    cards.forEach(({ geometry, texture }) => {
-      geometry.dispose();
-      texture.dispose();
-    });
-  }, [cards]);
-
-  useFrame((_, delta) => {
-    if (orbitRef.current && !paused) orbitRef.current.rotation.z += delta * 0.12;
-  });
-
-  return (
-    <group ref={orbitRef}>
-      {cards.map(({ geometry, texture }, index) => {
-        const angle = (index / cards.length) * Math.PI * 2;
-        return (
-          <Billboard
-            key={PROJECTS[index].title}
-            position={[Math.cos(angle) * 2.2, Math.sin(angle) * 2.2, 0.05]}
-            follow
-          >
-            <mesh
-              geometry={geometry}
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelect(index);
-              }}
-              onPointerOver={onPointerOver}
-              onPointerOut={onPointerOut}
-            >
-              <meshBasicMaterial
-                map={texture}
-                color="#ffffff"
-                side={DoubleSide}
-                transparent
-                opacity={0.96}
-                depthWrite={false}
-                toneMapped={false}
-              />
-            </mesh>
-          </Billboard>
-        );
-      })}
-    </group>
-  );
-}
 
 function CommunicationSatellite() {
   return (
@@ -288,12 +205,45 @@ function createGoldenBurstGeometry() {
 }
 
 function GoldenSecretParticles({ active, paused }) {
-  const pointsRef = useRef(null);
+  const meshRef = useRef(null);
   const materialRef = useRef(null);
   const elapsedRef = useRef(0);
   const geometry = useMemo(() => createGoldenBurstGeometry(), []);
+  const starGeometry = useMemo(() => new SphereGeometry(1, 6, 4), []);
+  const starMaterial = useMemo(() => new MeshBasicMaterial({
+    color: '#ffd879',
+    transparent: true,
+    opacity: 1,
+    depthWrite: false,
+    toneMapped: false,
+  }), []);
+  const transform = useMemo(() => ({
+    position: new Vector3(),
+    scale: new Vector3(),
+    rotation: new Quaternion(),
+    matrix: new Matrix4(),
+  }), []);
 
-  useEffect(() => () => geometry.dispose(), [geometry]);
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const positions = geometry.getAttribute('position');
+    const { position, scale, rotation, matrix } = transform;
+    for (let index = 0; index < positions.count; index += 1) {
+      position.fromBufferAttribute(positions, index);
+      scale.setScalar(0.07);
+      matrix.compose(position, rotation, scale);
+      mesh.setMatrixAt(index, matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [geometry, transform]);
+
+  useEffect(() => () => {
+    geometry.dispose();
+    starGeometry.dispose();
+    starMaterial.dispose();
+  }, [geometry, starGeometry, starMaterial]);
+
   useEffect(() => {
     if (active) elapsedRef.current = 0;
   }, [active]);
@@ -303,27 +253,21 @@ function GoldenSecretParticles({ active, paused }) {
     elapsedRef.current += delta;
     const elapsed = elapsedRef.current;
     const progress = Math.min(1, Math.max(0, elapsed / 2.6));
-    if (pointsRef.current) {
-      pointsRef.current.scale.setScalar(0.28 + progress * 1.65);
-      pointsRef.current.rotation.y = elapsed * 0.28;
-      pointsRef.current.rotation.x = elapsed * 0.12;
+    if (meshRef.current) {
+      meshRef.current.scale.setScalar(0.28 + progress * 1.65);
+      meshRef.current.rotation.y = elapsed * 0.28;
+      meshRef.current.rotation.x = elapsed * 0.12;
     }
     if (materialRef.current) materialRef.current.opacity = Math.max(0, 1 - progress);
   });
 
   return (
-    <points ref={pointsRef} geometry={geometry} visible={active}>
-      <pointsMaterial
-        ref={materialRef}
-        color="#ffd879"
-        size={0.14}
-        sizeAttenuation
-        transparent
-        opacity={1}
-        depthWrite={false}
-        toneMapped={false}
-      />
-    </points>
+    <instancedMesh
+      ref={meshRef}
+      args={[starGeometry, starMaterial, geometry.getAttribute('position').count]}
+      visible={active}
+      frustumCulled={false}
+    />
   );
 }
 
@@ -411,6 +355,7 @@ function OrbitingMoon({ paused, focusRef, onSelect, onPointerOver, onPointerOut 
             <sphereGeometry args={[0.42, 48, 48]} />
             <meshStandardMaterial map={surfaceMap} roughness={0.96} metalness={0} />
           </mesh>
+          <SceneLabel position={[0, 2.1, 0]}>Astrofotografía</SceneLabel>
         </group>
       </group>
     </group>
@@ -502,6 +447,58 @@ function createClusterGeometry(center, spread, count, seed, baseColor) {
   return geometry;
 }
 
+function InstancedStars({ geometry, starGeometry, material, size }) {
+  const meshRef = useRef(null);
+  const { camera } = useThree();
+  const orientation = useMemo(() => ({
+    camera: new Quaternion(),
+    parent: new Quaternion(),
+  }), []);
+  const transform = useMemo(() => ({
+    position: new Vector3(),
+    scale: new Vector3(),
+    rotation: new Quaternion(),
+    matrix: new Matrix4(),
+    color: new Color(),
+  }), []);
+
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const positions = geometry.getAttribute('position');
+    const colors = geometry.getAttribute('color');
+    const { position, scale, rotation, matrix, color } = transform;
+    for (let index = 0; index < positions.count; index += 1) {
+      position.fromBufferAttribute(positions, index);
+      scale.setScalar(size);
+      matrix.compose(position, rotation, scale);
+      mesh.setMatrixAt(index, matrix);
+      if (colors) {
+        color.fromBufferAttribute(colors, index);
+        mesh.setColorAt(index, color);
+      }
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [geometry, size, transform]);
+
+  useFrame(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    camera.getWorldQuaternion(orientation.camera);
+    mesh.parent?.getWorldQuaternion(orientation.parent);
+    mesh.quaternion.copy(orientation.parent.invert().multiply(orientation.camera));
+  });
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[starGeometry, material, geometry.getAttribute('position').count]}
+      frustumCulled={false}
+    />
+  );
+}
+
 function CosmicBackdrop({ paused }) {
   const groupRef = useRef(null);
   const layers = useMemo(() => ({
@@ -513,12 +510,22 @@ function CosmicBackdrop({ paused }) {
       createClusterGeometry([-8, -25, -58], [18, 11, 14], 1250, 51, '#274fa8'),
     ],
   }), []);
+  const starGeometry = useMemo(() => new PlaneGeometry(1, 1), []);
+  const starMaterial = useMemo(() => new MeshBasicMaterial({
+    map: layers.starSprite,
+    transparent: true,
+    blending: AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  }), [layers.starSprite]);
 
   useEffect(() => () => {
     layers.galaxy.dispose();
     layers.starSprite.dispose();
     layers.clusters.forEach((geometry) => geometry.dispose());
-  }, [layers]);
+    starGeometry.dispose();
+    starMaterial.dispose();
+  }, [layers, starGeometry, starMaterial]);
 
   useFrame((_, delta) => {
     if (groupRef.current && !paused) groupRef.current.rotation.y += delta * 0.003;
@@ -526,33 +533,20 @@ function CosmicBackdrop({ paused }) {
 
   return (
     <group ref={groupRef}>
-      <points geometry={layers.galaxy} rotation={[0.34, 0.05, 0]}>
-        <pointsMaterial
-          map={layers.starSprite}
-          size={0.16}
-          sizeAttenuation
-          vertexColors
-          transparent
-          opacity={0.55}
-          blending={AdditiveBlending}
-          depthWrite={false}
-          toneMapped={false}
-        />
-      </points>
+      <InstancedStars
+        geometry={layers.galaxy}
+        starGeometry={starGeometry}
+        material={starMaterial}
+        size={0.16}
+      />
       {layers.clusters.map((geometry, index) => (
-        <points key={index} geometry={geometry}>
-          <pointsMaterial
-            map={layers.starSprite}
-            size={0.24 + index * 0.035}
-            sizeAttenuation
-            vertexColors
-            transparent
-            opacity={0.36}
-            blending={AdditiveBlending}
-            depthWrite={false}
-            toneMapped={false}
-          />
-        </points>
+        <InstancedStars
+          key={index}
+          geometry={geometry}
+          starGeometry={starGeometry}
+          material={starMaterial}
+          size={0.24 + index * 0.035}
+        />
       ))}
     </group>
   );
@@ -650,10 +644,10 @@ function createPortalPreviewTexture(form, accentColor) {
   } else if (form === 'crystal') {
     context.fillStyle = '#d6a5ff';
     context.font = 'bold 23px sans-serif';
-    context.fillText('UNIVERSO PERSONAL', 34, 100);
+    context.fillText('PROYECTOS', 34, 100);
     context.fillStyle = '#b6c7d8';
     context.font = '12px monospace';
-    context.fillText('ASTRONOMÍA  /  LSA  /  ARTE', 36, 122);
+    context.fillText('DISEÑO  /  DESARROLLO  /  WEB', 36, 122);
     context.fillStyle = '#0c192a';
     context.fillRect(34, 143, 438, 137);
     context.strokeStyle = '#745db2';
@@ -808,7 +802,7 @@ function InteriorDiorama({ radius, color, form, paused }) {
   );
 }
 
-function OrbitingPortal({ position, speed, paused, focusRef, onClick, onPointerOver, onPointerOut, spiralAmplitude = 0.12, spiralPhase = 0, children }) {
+function OrbitingPortal({ position, speed, paused, focusRef, onClick, onPointerOver, onPointerOut, label, spiralAmplitude = 0.12, spiralPhase = 0, children }) {
   const orbitRef = useRef(null);
   const planetPositionRef = useRef(null);
   const radius = Math.hypot(position[0], position[1]);
@@ -837,9 +831,77 @@ function OrbitingPortal({ position, speed, paused, focusRef, onClick, onPointerO
           onPointerOut={onPointerOut}
         >
           {children}
+          <SceneLabel>{label}</SceneLabel>
         </group>
       </group>
     </group>
+  );
+}
+
+function createSceneLabelTexture(label) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('No se pudo crear la etiqueta de navegación.');
+
+  context.font = '600 38px system-ui, sans-serif';
+  const height = 92;
+  const width = Math.ceil(context.measureText(label).width) + 56;
+  const radius = height / 2;
+  canvas.width = width;
+  canvas.height = height;
+  context.font = '600 38px system-ui, sans-serif';
+  context.lineWidth = 2;
+  context.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+  context.fillStyle = 'rgba(7, 16, 29, 0.82)';
+  context.beginPath();
+  context.moveTo(radius, 2);
+  context.arcTo(width - 2, 2, width - 2, height - 2, radius);
+  context.arcTo(width - 2, height - 2, 2, height - 2, radius);
+  context.arcTo(2, height - 2, 2, 2, radius);
+  context.arcTo(2, 2, width - 2, 2, radius);
+  context.closePath();
+  context.fill();
+  context.stroke();
+  context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(label, width / 2, height / 2);
+
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  texture.anisotropy = 4;
+  return { texture, aspect: width / height };
+}
+
+function SceneLabel({ children, position = [0, 1.5, 0] }) {
+  const label = String(children);
+  const { texture, aspect } = useMemo(() => createSceneLabelTexture(label), [label]);
+  const meshRef = useRef(null);
+  const worldPosition = useMemo(() => new Vector3(), []);
+
+  useEffect(() => () => texture.dispose(), [texture]);
+
+  useFrame(({ camera, size }) => {
+    if (!meshRef.current || !camera.isPerspectiveCamera) return;
+    meshRef.current.getWorldPosition(worldPosition);
+    const distance = camera.position.distanceTo(worldPosition);
+    const height = (24 * 2 * distance * Math.tan(camera.fov * Math.PI / 360)) / size.height;
+    meshRef.current.scale.set(height * aspect, height, 1);
+  });
+
+  return (
+    <Billboard position={position}>
+      <mesh ref={meshRef} renderOrder={10}>
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial
+          map={texture}
+          transparent
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+    </Billboard>
   );
 }
 
@@ -937,7 +999,6 @@ function Planet({ color, radius, emissiveIntensity, seed, form = 'sphere', pause
 
 function ProjectTitlePreview({ title, role, category, accent, index, technologies }) {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const { playSound } = useAppAudio();
 
   return (
     <div
@@ -955,7 +1016,6 @@ function ProjectTitlePreview({ title, role, category, accent, index, technologie
           aria-expanded={isPreviewOpen}
           onClick={() => {
             setIsPreviewOpen(true);
-            playSound('open');
           }}
           className="text-left transition-colors hover:text-white/75 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-4 focus-visible:outline-white/70"
         >
@@ -1134,7 +1194,13 @@ function ProjectCarousel({ selectedIndex, onSelect, children }) {
   );
 }
 
-export default function Galaxia({ isIntro = false, isEntered = false, style, onExitToRealWorld }) {
+export default function Galaxia({
+  isIntro = false,
+  isEntered = false,
+  initialModule = null,
+  style,
+  onExitToRealWorld,
+}) {
   const [activeModule, setActiveModule] = useState(null);
   const [flightModule, setFlightModule] = useState(null);
   const [isFlying, setIsFlying] = useState(isEntered);
@@ -1142,8 +1208,6 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
   );
-  const [showNavigationToast, setShowNavigationToast] = useState(false);
-  const [isIndexOpen, setIsIndexOpen] = useState(false);
   const [cameraResetKey, setCameraResetKey] = useState(0);
   const [sceneReady, setSceneReady] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -1155,7 +1219,6 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
   );
   const [isPerformanceLow, setIsPerformanceLow] = useState(false);
   const {
-    audioEnabled,
     audioError,
     audioLevel,
     playSound,
@@ -1164,13 +1227,12 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
   } = useAppAudio();
   const controlsRef = useRef(null);
   const canvasShellRef = useRef(null);
-  const indexToggleRef = useRef(null);
   const dialogRef = useRef(null);
   const dialogCloseRef = useRef(null);
   const dialogTriggerRef = useRef(null);
-  const toastDismissedRef = useRef(false);
   const secretClickRef = useRef({ count: 0, lastClick: 0 });
   const secretTimeoutRef = useRef(null);
+  const initialModuleOpened = useRef(false);
   const coreRef = useRef(null);
   const moonRef = useRef(null);
   const projectsRef = useRef(null);
@@ -1224,20 +1286,6 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
   }, []);
 
   useEffect(() => {
-    if (isIntro || toastDismissedRef.current) return undefined;
-
-    setShowNavigationToast(true);
-    const timeout = window.setTimeout(() => {
-      toastDismissedRef.current = true;
-      setShowNavigationToast(false);
-    }, 7000);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [isIntro]);
-
-  useEffect(() => {
     if (sceneReady) {
       const timeout = window.setTimeout(() => setIsLoading(false), 650);
       return () => window.clearTimeout(timeout);
@@ -1256,17 +1304,15 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         : null;
     }
     setEmailCopyStatus('');
-    playSound('open');
     setActiveModule(null);
     setFlightModule(module);
     setIsFlying(true);
-  }, [playSound]);
-  const openIndexedModule = useCallback((module, projectIndex) => {
-    if (typeof projectIndex === 'number') setSelectedProjectIndex(projectIndex);
-    setIsIndexOpen(false);
-    openModule(module);
-    dialogTriggerRef.current = indexToggleRef.current;
-  }, [openModule]);
+  }, []);
+  useEffect(() => {
+    if (!initialModule || !sceneReady || initialModuleOpened.current) return;
+    initialModuleOpened.current = true;
+    openModule(initialModule);
+  }, [initialModule, openModule, sceneReady]);
   const finishSolarExit = useCallback(() => {
     onExitToRealWorld?.();
   }, [onExitToRealWorld]);
@@ -1275,6 +1321,10 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
     setIsCinematicExit(true);
     setIsFlying(true);
   }, []);
+  const handleCoreClick = useCallback((event) => {
+    event.stopPropagation();
+    openModule('NUCLEO');
+  }, [openModule]);
   const handleObjectHover = (event) => {
     event?.stopPropagation();
     window.dispatchEvent(new CustomEvent('app:world-cursor', {
@@ -1286,12 +1336,11 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
     window.dispatchEvent(new CustomEvent('app:world-cursor', { detail: { active: false } }));
   };
   const closeModule = useCallback(() => {
-    playSound('close');
     setActiveModule(null);
     setFlightModule(null);
     setIsFlying(true);
     window.requestAnimationFrame(() => dialogTriggerRef.current?.focus());
-  }, [playSound]);
+  }, []);
   const copyEmail = useCallback(async () => {
     try {
       await navigator.clipboard.writeText('00gabrielaedwin00@gmail.com');
@@ -1305,7 +1354,6 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
     if (activeModule) dialogCloseRef.current?.focus();
   }, [activeModule]);
   const centerGalaxy = useCallback(() => {
-    setIsIndexOpen(false);
     setActiveModule(null);
     setFlightModule(null);
     setIsFlying(true);
@@ -1328,13 +1376,12 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         toggleAudio();
       } else if (event.key === 'Escape') {
         if (activeModule || flightModule) closeModule();
-        else if (isIndexOpen) setIsIndexOpen(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeModule, closeModule, flightModule, isIndexOpen, prefersReducedMotion, toggleAudio]);
+  }, [activeModule, closeModule, flightModule, prefersReducedMotion, toggleAudio]);
   const handleFlightComplete = (module) => {
     if (module) {
       setActiveModule(module);
@@ -1372,7 +1419,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         <SpatialAudioListener updateAudioListener={updateAudioListener} />
         <CameraFlight
           activeModule={flightModule}
-          initialFocus={isEntered ? 'NUCLEO' : null}
+          initialFocus={isEntered ? 'OVERVIEW' : null}
           ready={sceneReady}
           resetKey={cameraResetKey}
           controlsRef={controlsRef}
@@ -1409,13 +1456,12 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             <Bloom
               luminanceThreshold={0.4}
               luminanceSmoothing={0.22}
-              intensity={isCinematicExit ? bloomIntensity : isPerformanceLow ? 0.18 : 0.42}
+              intensity={isCinematicExit ? bloomIntensity : isPerformanceLow ? 0.14 : 0.28}
               mipmapBlur={!isPerformanceLow}
             />
             {!isPerformanceLow && <ChromaticAberration offset={CHROMATIC_ABERRATION_OFFSET} />}
           </EffectComposer>
         )}
-        <SceneReady onReady={() => setSceneReady(true)} />
         <Butterfly
           isEntered={isEntered}
           audioLevel={audioLevel}
@@ -1429,8 +1475,10 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
         <CosmicBackdrop paused={prefersReducedMotion} />
 
         <Suspense fallback={null}>
-          <group ref={coreRef} onClick={handleSunClick} onPointerOver={handleObjectHover} onPointerOut={handleObjectPointerOut}>
+          <SceneReady onReady={() => setSceneReady(true)} />
+          <group ref={coreRef} onClick={handleCoreClick} onPointerOver={handleObjectHover} onPointerOut={handleObjectPointerOut}>
             <Earth paused={prefersReducedMotion} />
+            <SceneLabel position={[0, 1.75, 0]}>Perfil & Stack</SceneLabel>
           </group>
           <OrbitingMoon
             paused={areOrbitsPaused || isFlying || activeModule === 'ASTROFOTOS'}
@@ -1445,6 +1493,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
           position={[-5.7, 2.93, 0.55]}
           speed={0.071}
           paused={areOrbitsPaused}
+          label="Proyectos"
           spiralPhase={Math.PI}
           focusRef={projectsRef}
           onClick={() => {
@@ -1455,21 +1504,13 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
           onPointerOut={handleObjectPointerOut}
         >
           <Planet color="#a855f7" radius={0.9} emissiveIntensity={0.5} seed={4} metalness={0.72} form="crystal" paused={prefersReducedMotion} />
-          <ProjectOrbitCards
-            paused={areOrbitsPaused}
-            onSelect={(index) => {
-              setSelectedProjectIndex(index);
-              openModule('PROYECTOS');
-            }}
-            onPointerOver={handleObjectHover}
-            onPointerOut={handleObjectPointerOut}
-          />
         </OrbitingPortal>
 
         <OrbitingPortal
           position={[6.23, -3.72, -0.8]}
           speed={0.043}
           paused={areOrbitsPaused}
+          label="Formación"
           spiralPhase={Math.PI * 1.5}
           focusRef={credentialsRef}
           onClick={() => openModule('CREDENCIALES')}
@@ -1483,6 +1524,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
           position={[-0.3, 8.2, -0.55]}
           speed={-0.026}
           paused={areOrbitsPaused}
+          label="Contacto"
           spiralPhase={Math.PI * 0.75}
           focusRef={contactRef}
           onClick={() => openModule('CONTACTO')}
@@ -1503,87 +1545,29 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             data-cursor
             onClick={handleSunClick}
             aria-label="Volver al sendero"
-            className="fixed bottom-6 left-4 z-[60] flex h-11 min-h-11 w-11 items-center justify-center border border-white/15 bg-[#050817]/80 font-mono text-base text-white/80 shadow-[0_12px_40px_rgba(0,0,0,0.3)] backdrop-blur-xl transition hover:border-cyan-100/45 hover:bg-[#050817]/90 hover:text-cyan-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 sm:left-1/2 sm:h-auto sm:w-auto sm:-translate-x-1/2 sm:px-4 sm:py-2 sm:text-[10px]"
+            title="Volver al sendero"
+            className="fixed bottom-4 left-4 z-[70] flex min-h-11 items-center gap-2.5 rounded-full border border-cyan-100/20 bg-[#07101b]/55 px-4 font-body text-[11px] tracking-wide text-white/85 shadow-[0_8px_32px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl transition duration-300 hover:border-cyan-100/45 hover:bg-[#07101b]/75 hover:text-cyan-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 sm:bottom-5 sm:left-5"
           >
-            <span className="sm:hidden" aria-hidden="true">←</span>
-            <span className="hidden sm:inline">← VOLVER AL SENDERO</span>
+            <Sparkles aria-hidden="true" size={14} strokeWidth={1.6} className="text-cyan-100/85" />
+            <span aria-hidden="true">←</span>
+            <span>Sendero</span>
           </button>
-          <nav
-            aria-label="Zonas principales"
-            className="absolute left-1/2 top-4 z-[70] flex w-[min(94vw,34rem)] -translate-x-1/2 items-center justify-center gap-1 rounded-full border border-white/10 bg-[#050817]/80 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:top-5 sm:gap-2 sm:p-2"
-          >
-            {[
-              ['PROYECTOS', 'Proyectos'],
-              ['ASTROFOTOS', 'Astrofotos'],
-              ['CREDENCIALES', 'Credenciales'],
-              ['CONTACTO', 'Contacto'],
-            ].map(([module, label]) => (
-              <button
-                key={module}
-                type="button"
-                data-cursor
-                onClick={() => {
-                  if (module === 'PROYECTOS') setSelectedProjectIndex(0);
-                  openModule(module);
-                }}
-                className="min-h-11 flex-1 rounded-full border border-transparent px-2 text-[9px] font-medium tracking-wide text-white/80 transition hover:border-cyan-100/25 hover:bg-white/[0.07] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 sm:px-4 sm:text-[10px]"
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-
-          <AnimatePresence>
-            {showNavigationToast && (
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 5 }}
-                transition={{ duration: 0.35, ease: 'easeOut' }}
-                className="absolute bottom-24 left-1/2 z-[70] flex w-[min(92vw,34rem)] -translate-x-1/2 items-start gap-3 border border-white/10 bg-[#050817]/85 px-4 py-3 font-mono text-[10px] leading-relaxed tracking-wide text-white/75 shadow-[0_12px_40px_rgba(0,0,0,0.3)] backdrop-blur-xl sm:text-xs"
-                role="note"
-                aria-label="Ayuda de navegación"
-              >
-                <p className="flex-1">
-                  [ ✦ ] Explora los portales o abre el índice ≡ para ir directamente a cada sección y proyecto.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    toastDismissedRef.current = true;
-                    setShowNavigationToast(false);
-                  }}
-                  aria-label="Descartar ayuda de navegación"
-                  className="flex h-11 min-w-11 items-center justify-center border border-white/15 text-sm text-white/70 transition hover:border-white/40 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
-                >
-                  ×
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
 
           {audioError && (
             <p
               role="status"
               aria-live="polite"
-              className="absolute bottom-[4.7rem] left-1/2 z-[70] w-max max-w-[90vw] -translate-x-1/2 border border-orange-200/15 bg-[#050817]/85 px-3 py-2 text-center font-mono text-[9px] text-orange-100/75 backdrop-blur-xl"
+              className="fixed bottom-[4.5rem] right-4 z-[70] w-max max-w-[90vw] rounded-xl border border-orange-200/15 bg-[#050817]/75 px-3 py-2 text-center font-mono text-[9px] text-orange-100/75 backdrop-blur-xl sm:bottom-[5rem] sm:right-5"
             >
-              No se pudo activar el audio. Vuelve a intentarlo con ♫.
+              No se pudo activar el audio. Vuelve a intentarlo desde el control de sonido.
             </p>
           )}
 
-          <div className="absolute bottom-5 right-5 z-[70] flex items-center gap-1 rounded-full border border-white/10 bg-[#050817]/80 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-            <button
-              type="button"
-              data-cursor
-              onClick={toggleAudio}
-              aria-label="Activar o silenciar audio ambiental"
-              aria-pressed={audioEnabled}
-              title={`Audio ${audioEnabled ? 'activado' : 'silenciado'} (M)`}
-              className="flex h-11 w-11 items-center justify-center rounded-full border border-transparent font-mono text-sm text-white/75 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
-            >
-              ♫
-            </button>
+          <div
+            aria-label="Controles de la galaxia"
+            className="fixed bottom-4 right-4 z-[70] flex items-center gap-0.5 rounded-full border border-white/10 bg-[#07101b]/55 p-1 shadow-[0_8px_32px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-2xl sm:bottom-5 sm:right-5 sm:gap-1 sm:p-1.5"
+          >
+            <AudioToggleButton className="flex h-10 w-10 items-center justify-center rounded-full border border-transparent font-mono text-base text-white/70 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 sm:h-11 sm:w-11" />
             <button
               type="button"
               data-cursor
@@ -1596,9 +1580,11 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
               title={prefersReducedMotion
                 ? 'Animaciones pausadas por preferencia del sistema'
                 : `${areOrbitsPaused ? 'Reanudar' : 'Pausar'} órbita (Espacio)`}
-              className="flex h-11 w-11 items-center justify-center rounded-full border border-transparent font-mono text-sm text-white/75 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-transparent font-mono text-sm text-white/70 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 disabled:cursor-not-allowed disabled:opacity-40 sm:h-11 sm:w-11"
             >
-              {areOrbitsPaused ? '▶' : '⏸'}
+              {areOrbitsPaused
+                ? <Play aria-hidden="true" size={16} strokeWidth={1.6} />
+                : <Pause aria-hidden="true" size={16} strokeWidth={1.6} />}
             </button>
             <button
               type="button"
@@ -1606,89 +1592,16 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
               onClick={centerGalaxy}
               aria-label="Centrar cámara en la galaxia"
               title="Centrar vista"
-              className="flex h-11 w-11 items-center justify-center rounded-full border border-transparent font-mono text-base text-white/75 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-transparent font-mono text-lg text-white/70 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200 sm:h-11 sm:w-11"
             >
-              ⌖
-            </button>
-            <button
-              type="button"
-              data-cursor
-              ref={indexToggleRef}
-              onClick={() => setIsIndexOpen((open) => !open)}
-              aria-label={isIndexOpen ? 'Cerrar índice de portales' : 'Abrir índice de portales'}
-              aria-expanded={isIndexOpen}
-              aria-controls="portal-index"
-              title="Índice de portales"
-              className="flex h-11 w-11 items-center justify-center rounded-full border border-transparent font-mono text-base text-white/75 transition hover:border-white/15 hover:bg-white/5 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
-            >
-              ≡
+              <LocateFixed aria-hidden="true" size={18} strokeWidth={1.6} />
             </button>
           </div>
-
-          <AnimatePresence>
-            {isIndexOpen && (
-              <motion.nav
-                initial={{ opacity: 0, y: 10, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                transition={{ duration: 0.2, ease: 'easeOut' }}
-                id="portal-index"
-                aria-label="Índice alternativo del portfolio"
-                className="absolute bottom-20 right-5 z-[70] max-h-[min(70vh,36rem)] w-[min(90vw,22rem)] overflow-y-auto border border-white/10 bg-[#050817]/95 p-3 font-mono shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
-              >
-                <p className="px-3 pb-2 text-[10px] uppercase tracking-[0.18em] text-white/45">Explorar por contenido</p>
-                <button
-                  type="button"
-                  data-cursor
-                  onClick={() => openIndexedModule('NUCLEO')}
-                  className="flex min-h-11 w-full items-center justify-between border-t border-white/[0.07] px-3 py-3 text-left text-xs text-white/75 transition hover:bg-white/[0.04] hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
-                >
-                  <span>Quién soy</span><span className="text-white/35">01 ↗</span>
-                </button>
-                <div className="border-t border-white/[0.07] py-2">
-                  <p className="px-3 py-2 text-[9px] uppercase tracking-[0.16em] text-purple-100/60">Proyectos</p>
-                  {PROJECTS.map((project, index) => (
-                    <button
-                      key={project.title}
-                      type="button"
-                      data-cursor
-                      onClick={() => openIndexedModule('PROYECTOS', index)}
-                      className="flex min-h-11 w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs text-white/70 transition hover:bg-white/[0.04] hover:text-purple-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200"
-                    >
-                      <span>{project.title}</span>                      <span className="shrink-0 text-[10px] text-white/35">0{index + 2} →</span>
-                    </button>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  data-cursor
-                  onClick={() => openIndexedModule('ASTROFOTOS')}
-                  className="flex min-h-11 w-full items-center justify-between border-t border-white/[0.07] px-3 py-3 text-left text-xs text-white/75 transition hover:bg-white/[0.04] hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
-                >
-                  <span>Astrofotografía</span><span className="text-white/35">05 →</span>
-                </button>
-                {[
-                  ['CREDENCIALES', 'Credenciales', '06'],
-                  ['CONTACTO', 'Contacto', '07'],
-                ].map(([module, label, index]) => (
-                  <button
-                    key={module}
-                    type="button"
-                    data-cursor
-                    onClick={() => openIndexedModule(module)}
-                    className="flex min-h-11 w-full items-center justify-between border-t border-white/[0.07] px-3 py-3 text-left text-xs text-white/75 transition hover:bg-white/[0.04] hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
-                  >
-                    <span>{label}</span><span className="text-white/35">{index} →</span>
-                  </button>
-                ))}
-              </motion.nav>
-            )}
-          </AnimatePresence>
         </>
       )}
 
       <AnimatePresence>
-        {isLoading && !isIntro && !isEntered && (
+        {isLoading && !isIntro && (
           <motion.div
             initial={{ opacity: 1 }}
             animate={{ opacity: 1 }}
@@ -1700,7 +1613,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
           >
             <div className="w-[min(22rem,78vw)]">
               <p className="mb-2 text-center text-[10px] tracking-[0.35em] text-cyan-200/70">
-                SISTEMA GALÁCTICO
+                INGRESANDO A MI PORTAFOLIO
               </p>
               <h2 className="mb-7 text-center text-2xl font-bold tracking-[0.18em]">
                 GABY EDWIN
@@ -1741,8 +1654,8 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
               transition={{ type: 'spring', stiffness: 220, damping: 24, mass: 0.85 }}
               role="dialog"
               aria-modal="true"
-              aria-label={`Ventana de ${activeModule}`}
-              className={`relative max-h-[min(86vh,56rem)] ${activeModule === 'CONTACTO' ? 'w-[min(92vw,28rem)]' : 'w-[min(92vw,52rem)]'} overflow-y-auto border border-white/15 bg-[#070a14]/90 p-5 font-mono text-white shadow-[0_20px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl sm:p-8 md:p-10`}
+              aria-label={`Sección: ${MODULE_LABELS[activeModule] ?? activeModule}`}
+              className={`relative max-h-[min(86vh,56rem)] ${activeModule === 'CONTACTO' ? 'w-[min(92vw,28rem)]' : 'w-[min(92vw,52rem)]'} select-text overflow-y-auto border border-white/15 bg-[#070a14]/90 p-5 font-mono text-white shadow-[0_20px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl sm:p-8 md:p-10`}
               onClick={(event) => event.stopPropagation()}
               onKeyDown={(event) => {
                 if (event.key !== 'Tab') return;
@@ -1764,14 +1677,14 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
               ref={dialogCloseRef}
               type="button"
               onClick={closeModule}
-              aria-label="Cerrar portal y volver a la galaxia"
+              aria-label="Cerrar sección y volver a la galaxia"
               className="absolute right-4 top-4 flex min-h-11 min-w-11 items-center justify-center border border-white/15 px-3 py-2 font-mono text-xs text-white/75 transition-colors hover:border-white/45 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
             >
               [✕]
             </button>
             <div className="mb-7 flex items-center justify-between border-b border-white/10 pb-3 pr-16 text-[10px] uppercase tracking-[0.16em] text-white/50">
-              <span>Portal / expediente</span>
-              <span>{activeModule}</span>
+              <span>Sección</span>
+              <span>{MODULE_LABELS[activeModule] ?? activeModule}</span>
             </div>
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
@@ -1784,7 +1697,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             {activeModule === 'NUCLEO' && (
               <div className="space-y-6">
                 <header className="border-b border-orange-200/15 pb-5">
-                  <p className="mb-3 text-[9px] uppercase tracking-[0.22em] text-orange-200/75">El núcleo / Quién soy</p>
+                  <p className="mb-3 text-[9px] uppercase tracking-[0.22em] text-orange-200/75">Perfil & Stack</p>
                   <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Hola, soy Gaby</h2>
                   <p className="mt-2 text-sm text-orange-100/80">Artista digital y desarrolladora frontend.</p>
                 </header>
@@ -1809,6 +1722,54 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                     </span>
                   ))}
                 </div>
+                <section className="space-y-3 border-t border-white/10 pt-5">
+                  <div>
+                    <h3 className="text-[10px] uppercase tracking-[0.2em] text-orange-100/65">Stack tecnológico & arquitectura</h3>
+                    <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
+                      Herramientas que dan vida a experiencias web interactivas, visuales y responsivas.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {[
+                      {
+                        title: 'Frontend',
+                        technologies: 'React · Vite · JavaScript ES6+ · JSX',
+                        detail: 'Arquitectura modular, componentes reutilizables y estado interactivo.',
+                      },
+                      {
+                        title: 'Gráficos 3D & WebGL',
+                        technologies: 'Three.js · React Three Fiber · Drei',
+                        detail: 'Escenas 3D, geometrías, materiales, iluminación y controles.',
+                      },
+                      {
+                        title: 'Físicas',
+                        technologies: 'Rapier Physics',
+                        detail: 'Gravedad y colisiones en tiempo real para objetos interactivos.',
+                      },
+                      {
+                        title: 'Animación & motion',
+                        technologies: 'GSAP · Framer Motion',
+                        detail: 'Transiciones cinemáticas, timelines y microinteracciones de UI.',
+                      },
+                      {
+                        title: 'Audio & multimedia',
+                        technologies: 'Web Audio API · HTML5 Audio',
+                        detail: 'Paisajes sonoros por escena y efectos sincronizados con la interacción.',
+                      },
+                      {
+                        title: 'UI/UX & visuales',
+                        technologies: 'Tailwind CSS · Glassmorphism · Shaders',
+                        detail: 'Interfaces adaptativas, HUD espacial y efectos visuales personalizados.',
+                      },
+                    ].map(({ title, technologies, detail }) => (
+                      <article key={title} className="border border-orange-100/10 bg-white/[0.025] p-3">
+                        <h4 className="text-[9px] uppercase tracking-[0.14em] text-orange-100/75">{title}</h4>
+                        <p className="mt-1.5 text-[10px] leading-relaxed text-slate-100">{technologies}</p>
+                        <p className="mt-1 text-[9px] leading-relaxed text-slate-400">{detail}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
                 <div className="flex flex-wrap gap-3 border-t border-white/10 pt-4">
                   <button
                     type="button"
@@ -1836,7 +1797,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             {activeModule === 'ASTROFOTOS' && (
               <div className="space-y-6">
                 <header className="border-b border-cyan-200/10 pb-5">
-                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-cyan-200/70">Archivo lunar / 03</p>
+                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-cyan-200/70">Astrofotografía / 03</p>
                   <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Astrofotografía</h2>
                   <p className="mt-2 text-sm text-slate-300">Una colección personal de observaciones del cielo nocturno.</p>
                 </header>
@@ -1861,9 +1822,9 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             {activeModule === 'CREDENCIALES' && (
               <div className="space-y-6">
                 <header className="border-b border-amber-200/10 pb-5">
-                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-amber-200/70">Archivo estelar / 02</p>
-                  <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Títulos & credenciales</h2>
-                  <p className="mt-2 text-sm text-slate-300">Formación académica y certificaciones.</p>
+                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-amber-200/70">Formación / 02</p>
+                  <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Formación y certificaciones</h2>
+                  <p className="mt-2 text-sm text-slate-300">Estudios universitarios y cursos realizados.</p>
                 </header>
                 <section>
                   <h3 className="mb-3 text-[10px] uppercase tracking-[0.2em] text-amber-100/65">Títulos universitarios</h3>
@@ -1880,7 +1841,7 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
                   </div>
                 </section>
                 <section>
-                  <h3 className="mb-3 text-[10px] uppercase tracking-[0.2em] text-amber-100/65">Certificaciones & formación</h3>
+                  <h3 className="mb-3 text-[10px] uppercase tracking-[0.2em] text-amber-100/65">Cursos y certificaciones</h3>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {[
                       ['Desarrollo Web', 'Coderhouse'],
@@ -1902,8 +1863,8 @@ export default function Galaxia({ isIntro = false, isEntered = false, style, onE
             {activeModule === 'PROYECTOS' && (
               <ProjectCarousel selectedIndex={selectedProjectIndex} onSelect={setSelectedProjectIndex}>
                 <header className="border-b border-purple-200/10 pb-4">
-                  <p className="mb-2 text-[10px] uppercase tracking-[0.22em] text-purple-200/70">Órbita creativa / 01</p>
-                  <h2 className="text-2xl font-semibold tracking-[-0.05em] text-white sm:text-3xl">Carrusel de proyectos</h2>
+                  <p className="mb-2 text-[10px] uppercase tracking-[0.22em] text-purple-200/70">Proyectos / 01</p>
+                  <h2 className="text-2xl font-semibold tracking-[-0.05em] text-white sm:text-3xl">Proyectos destacados</h2>
                   <p className="mt-2 text-sm text-slate-300">Explora el alcance, mi aporte y las herramientas de cada proyecto.</p>
                 </header>
                 <AnimatePresence mode="wait" initial={false}>
