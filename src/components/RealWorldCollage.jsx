@@ -4896,7 +4896,7 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
             Gaby Edwin <span className="text-amber-100/70">_</span>
           </h1>
           <p className="mt-1 text-[8px] tracking-[0.06em] text-white/75 sm:text-[10px] sm:tracking-[0.1em]">
-            Frontend Developer &amp; Arte Digital
+            Creative Developer &amp; Arte Digital
           </p>
         </section>
         <motion.button

@@ -1,19 +1,21 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber';
 import { Billboard, OrbitControls, PerformanceMonitor } from '@react-three/drei';
-import { Bloom, ChromaticAberration, EffectComposer } from '@react-three/postprocessing';
+import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import { AnimatePresence, motion } from 'framer-motion';
 import { LocateFixed, Pause, Play, Sparkles } from 'lucide-react';
 import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import Lenis from 'lenis';
 import AudioToggleButton from '../../../audio/AudioToggleButton';
 import {
   AdditiveBlending,
   BackSide,
   BufferGeometry,
   CanvasTexture,
-  Color,
   DoubleSide,
   Float32BufferAttribute,
+  LinearFilter,
   Matrix4,
   MeshBasicMaterial,
   PlaneGeometry,
@@ -21,13 +23,11 @@ import {
   SRGBColorSpace,
   SphereGeometry,
   TextureLoader,
-  Vector2,
   Vector3,
 } from 'three';
 import { useAppAudio } from '../../../audio/AudioContext';
 import Butterfly from '../../Butterfly';
 
-const CHROMATIC_ABERRATION_OFFSET = new Vector2(0.0001, 0.0001);
 const MODULE_LABELS = {
   NUCLEO: 'Perfil & Stack',
   PROYECTOS: 'Proyectos',
@@ -35,6 +35,8 @@ const MODULE_LABELS = {
   CREDENCIALES: 'Formación y certificaciones',
   CONTACTO: 'Contacto',
 };
+gsap.registerPlugin(ScrollTrigger);
+
 const PROJECTS = [
   {
     title: 'Nowin Especias',
@@ -46,21 +48,21 @@ const PROJECTS = [
     accent: '#00f2fe',
   },
   {
-    title: 'Artes del Fuego',
-    category: 'Gestión & cerámica',
-    contribution: 'Administración y coordinación operativa.',
-    description: 'Sistema de inventario y gestión de stock para materiales cerámicos, hornos y herramientas del taller.',
-    technologies: ['React', 'Vite', 'Tailwind CSS', 'Firebase'],
-    url: 'https://artesdelfuego.vercel.app',
-    accent: '#ff9b70',
-  },
-  {
     title: 'Interfaces & Dashboards',
     category: 'Diseño UI/UX',
     contribution: 'Diseño UI/UX · prototipado interactivo.',
     description: 'Prototipos interactivos y componentes animados inspirados en la astronomía y la observación estelar.',
     technologies: ['Figma', 'Framer Motion', 'GSAP'],
     accent: '#c084fc',
+  },
+  {
+    title: 'Astronomía aficionada',
+    category: 'Astronomía & divulgación',
+    contribution: 'Exploración y divulgación astronómica.',
+    description: 'Sitio web dedicado a la astronomía aficionada y a la exploración del cielo.',
+    technologies: ['Astronomía', 'Divulgación', 'Web'],
+    url: 'https://00gabriela00edwin.github.io/Astronom-a-aficionada/',
+    accent: '#7dd3fc',
   },
 ];
 const staggerContainerVariants = {
@@ -362,194 +364,83 @@ function OrbitingMoon({ paused, focusRef, onSelect, onPointerOver, onPointerOut 
   );
 }
 
-function createGalaxyGeometry() {
-  const positions = [];
-  const colors = [];
-  const armPalette = ['#315aa8', '#8d459e', '#2f75aa', '#bd8c46'];
-  const armCount = 4;
-  const pointsPerArm = 1100;
+const DIGITAL_GLYPHS = '01{}[]=>();,.<>/constuseFrame';
 
-  for (let arm = 0; arm < armCount; arm += 1) {
-    for (let index = 0; index < pointsPerArm; index += 1) {
-      const progress = index / (pointsPerArm - 1);
-      const radius = 2.3 + progress * 25;
-      const angle = (arm / armCount) * Math.PI * 2 + progress * 7.4;
-      const spread = 0.12 + progress * 0.5;
-      const seed = index * 17.13 + arm * 91.7;
-      const offsetX = Math.sin(seed) * spread;
-      const offsetY = Math.cos(seed * 1.73) * spread;
-      positions.push(
-        Math.cos(angle) * radius + offsetX,
-        Math.sin(angle) * radius + offsetY,
-        Math.sin(seed * 0.39) * (0.12 + progress * 1.3),
-      );
+function CodeRainCanvas({ paused }) {
+  const canvasRef = useRef(null);
 
-      const color = new Color(armPalette[arm]);
-      color.lerp(new Color('#d9d7e8'), (Math.sin(index * 0.17 + arm) + 1) * 0.09);
-      if (progress < 0.14) color.lerp(new Color('#f5d28b'), (0.14 - progress) * 1.8);
-      colors.push(color.r, color.g, color.b);
-    }
-  }
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) throw new Error('No se pudo crear el fondo de código de la galaxia.');
 
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
-  return geometry;
-}
+    const fontSize = 12;
+    const lineHeight = 20;
+    const columnWidth = 30;
+    const streams = [];
+    let width = 0;
+    let height = 0;
+    let animationFrame = 0;
+    let previousTime = 0;
 
-function createStarSpriteTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 64;
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('No se pudo crear la textura difusa de las estrellas.');
+    const randomGlyph = () => DIGITAL_GLYPHS[Math.floor(Math.random() * DIGITAL_GLYPHS.length)];
+    const createStream = (startAtRandomHeight = true) => ({
+      y: startAtRandomHeight ? Math.random() * height : -Math.random() * height * 0.35,
+      speed: 14 + Math.random() * 18,
+      glyphs: Array.from({ length: 10 }, randomGlyph),
+      tint: Math.random() < 0.7 ? '92, 192, 181' : '185, 164, 112',
+    });
 
-  const glow = context.createRadialGradient(32, 32, 0, 32, 32, 32);
-  glow.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
-  glow.addColorStop(0.16, 'rgba(255, 255, 255, 0.58)');
-  glow.addColorStop(0.42, 'rgba(255, 255, 255, 0.18)');
-  glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
-  context.fillStyle = glow;
-  context.fillRect(0, 0, 64, 64);
-
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  texture.needsUpdate = true;
-  return texture;
-}
-
-function seededUnit(index, seed) {
-  const value = Math.sin(index * 127.1 + seed * 311.7) * 43758.5453;
-  return value - Math.floor(value);
-}
-
-function createClusterGeometry(center, spread, count, seed, baseColor) {
-  const positions = [];
-  const colors = [];
-  const tint = new Color(baseColor);
-
-  for (let index = 0; index < count; index += 1) {
-    const x = (seededUnit(index, seed) + seededUnit(index, seed + 2) + seededUnit(index, seed + 4) - 1.5) * 2;
-    const y = (seededUnit(index, seed + 6) + seededUnit(index, seed + 8) + seededUnit(index, seed + 10) - 1.5) * 2;
-    const z = (seededUnit(index, seed + 12) + seededUnit(index, seed + 14) + seededUnit(index, seed + 16) - 1.5) * 2;
-    positions.push(
-      center[0] + x * spread[0],
-      center[1] + y * spread[1],
-      center[2] + z * spread[2],
-    );
-    const color = tint.clone().lerp(new Color('#d8e7ff'), seededUnit(index, seed + 18) * 0.28);
-    colors.push(color.r, color.g, color.b);
-  }
-
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
-  return geometry;
-}
-
-function InstancedStars({ geometry, starGeometry, material, size }) {
-  const meshRef = useRef(null);
-  const { camera } = useThree();
-  const orientation = useMemo(() => ({
-    camera: new Quaternion(),
-    parent: new Quaternion(),
-  }), []);
-  const transform = useMemo(() => ({
-    position: new Vector3(),
-    scale: new Vector3(),
-    rotation: new Quaternion(),
-    matrix: new Matrix4(),
-    color: new Color(),
-  }), []);
-
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    const positions = geometry.getAttribute('position');
-    const colors = geometry.getAttribute('color');
-    const { position, scale, rotation, matrix, color } = transform;
-    for (let index = 0; index < positions.count; index += 1) {
-      position.fromBufferAttribute(positions, index);
-      scale.setScalar(size);
-      matrix.compose(position, rotation, scale);
-      mesh.setMatrixAt(index, matrix);
-      if (colors) {
-        color.fromBufferAttribute(colors, index);
-        mesh.setColorAt(index, color);
+    const resize = () => {
+      const bounds = canvas.getBoundingClientRect();
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+      width = bounds.width;
+      height = bounds.height;
+      canvas.width = Math.round(width * pixelRatio);
+      canvas.height = Math.round(height * pixelRatio);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      context.textBaseline = 'top';
+      streams.length = 0;
+      for (let index = 0; index < Math.ceil(width / columnWidth); index += 1) {
+        streams.push(createStream());
       }
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [geometry, size, transform]);
+    };
 
-  useFrame(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    camera.getWorldQuaternion(orientation.camera);
-    mesh.parent?.getWorldQuaternion(orientation.parent);
-    mesh.quaternion.copy(orientation.parent.invert().multiply(orientation.camera));
-  });
+    const renderFrame = (time) => {
+      const delta = previousTime ? Math.min((time - previousTime) / 1000, 0.05) : 0;
+      previousTime = time;
+      context.clearRect(0, 0, width, height);
 
-  return (
-    <instancedMesh
-      ref={meshRef}
-      args={[starGeometry, material, geometry.getAttribute('position').count]}
-      frustumCulled={false}
-    />
-  );
-}
+      streams.forEach((stream, column) => {
+        stream.y += stream.speed * delta;
+        for (let index = 0; index < stream.glyphs.length; index += 1) {
+          const glyphY = stream.y - index * lineHeight;
+          if (glyphY < -lineHeight || glyphY > height) continue;
+          const opacity = 0.15 + 0.07 * (1 - index / stream.glyphs.length);
+          context.fillStyle = `rgba(${stream.tint}, ${opacity})`;
+          context.fillText(stream.glyphs[index], column * columnWidth, glyphY);
+        }
+        if (stream.y - stream.glyphs.length * lineHeight > height) {
+          streams[column] = createStream(false);
+        }
+      });
 
-function CosmicBackdrop({ paused }) {
-  const groupRef = useRef(null);
-  const layers = useMemo(() => ({
-    galaxy: createGalaxyGeometry(),
-    starSprite: createStarSpriteTexture(),
-    clusters: [
-      createClusterGeometry([-29, 15, -32], [12, 8, 9], 1000, 7, '#3f68db'),
-      createClusterGeometry([31, -12, -42], [15, 10, 12], 1100, 23, '#a444bd'),
-      createClusterGeometry([-8, -25, -58], [18, 11, 14], 1250, 51, '#274fa8'),
-    ],
-  }), []);
-  const starGeometry = useMemo(() => new PlaneGeometry(1, 1), []);
-  const starMaterial = useMemo(() => new MeshBasicMaterial({
-    map: layers.starSprite,
-    transparent: true,
-    blending: AdditiveBlending,
-    depthWrite: false,
-    toneMapped: false,
-  }), [layers.starSprite]);
+      if (!paused) animationFrame = window.requestAnimationFrame(renderFrame);
+    };
 
-  useEffect(() => () => {
-    layers.galaxy.dispose();
-    layers.starSprite.dispose();
-    layers.clusters.forEach((geometry) => geometry.dispose());
-    starGeometry.dispose();
-    starMaterial.dispose();
-  }, [layers, starGeometry, starMaterial]);
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas);
+    resize();
+    animationFrame = window.requestAnimationFrame(renderFrame);
 
-  useFrame((_, delta) => {
-    if (groupRef.current && !paused) groupRef.current.rotation.y += delta * 0.003;
-  });
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+    };
+  }, [paused]);
 
-  return (
-    <group ref={groupRef}>
-      <InstancedStars
-        geometry={layers.galaxy}
-        starGeometry={starGeometry}
-        material={starMaterial}
-        size={0.16}
-      />
-      {layers.clusters.map((geometry, index) => (
-        <InstancedStars
-          key={index}
-          geometry={geometry}
-          starGeometry={starGeometry}
-          material={starMaterial}
-          size={0.24 + index * 0.035}
-        />
-      ))}
-    </group>
-  );
+  return <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" />;
 }
 
 function createPortalPreviewTexture(form, accentColor) {
@@ -681,15 +572,14 @@ function createPortalPreviewTexture(form, accentColor) {
     context.font = '12px monospace';
     context.fillText('TÍTULOS  /  FORMACIÓN  /  LSA', 38, 128);
     context.fillStyle = '#102238';
-    context.fillRect(36, 151, 428, 130);
+    context.fillRect(36, 151, 428, 104);
     [
       'Lic. Arte Digital · TECH',
-      'Máster IA en Diseño · TECH',
       'Web · React · JavaScript · Coderhouse',
       'Intérprete LSA · UNaM Humanidades',
     ].forEach((line, index) => {
-      const y = 174 + index * 27;
-      context.fillStyle = ['#ffd078', '#84e8ff', '#f5a7d5', '#bda2ff'][index];
+      const y = 174 + index * 34;
+      context.fillStyle = ['#ffd078', '#f5a7d5', '#bda2ff'][index];
       context.beginPath();
       context.arc(52, y - 4, 4, 0, Math.PI * 2);
       context.fill();
@@ -847,8 +737,10 @@ function createSceneLabelTexture(label) {
   const height = 92;
   const width = Math.ceil(context.measureText(label).width) + 56;
   const radius = height / 2;
-  canvas.width = width;
-  canvas.height = height;
+  const pixelRatio = 3;
+  canvas.width = width * pixelRatio;
+  canvas.height = height * pixelRatio;
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.font = '600 38px system-ui, sans-serif';
   context.lineWidth = 2;
   context.strokeStyle = 'rgba(255, 255, 255, 0.14)';
@@ -869,7 +761,10 @@ function createSceneLabelTexture(label) {
 
   const texture = new CanvasTexture(canvas);
   texture.colorSpace = SRGBColorSpace;
-  texture.anisotropy = 4;
+  texture.generateMipmaps = false;
+  texture.minFilter = LinearFilter;
+  texture.magFilter = LinearFilter;
+  texture.needsUpdate = true;
   return { texture, aspect: width / height };
 }
 
@@ -1213,7 +1108,6 @@ export default function Galaxia({
   const [isLoading, setIsLoading] = useState(true);
   const [isCinematicExit, setIsCinematicExit] = useState(false);
   const [bloomIntensity, setBloomIntensity] = useState(0.42);
-  const [loadingProgress, setLoadingProgress] = useState(0);
   const [dpr, setDpr] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches ? 1 : 1.5,
   );
@@ -1228,6 +1122,7 @@ export default function Galaxia({
   const controlsRef = useRef(null);
   const canvasShellRef = useRef(null);
   const dialogRef = useRef(null);
+  const dialogScrollRef = useRef(null);
   const dialogCloseRef = useRef(null);
   const dialogTriggerRef = useRef(null);
   const secretClickRef = useRef({ count: 0, lastClick: 0 });
@@ -1258,6 +1153,30 @@ export default function Galaxia({
     mediaQuery.addEventListener('change', updatePreference);
     return () => mediaQuery.removeEventListener('change', updatePreference);
   }, []);
+
+  useEffect(() => {
+    const wrapper = dialogScrollRef.current;
+    if (!activeModule || prefersReducedMotion || !wrapper) return undefined;
+
+    const lenis = new Lenis({
+      wrapper,
+      content: wrapper,
+      lerp: 0.08,
+      smoothWheel: true,
+      syncTouch: true,
+      syncTouchLerp: 0.08,
+      wheelMultiplier: 0.85,
+    });
+    const unsubscribe = lenis.on('scroll', ScrollTrigger.update);
+    const updateLenis = (time) => lenis.raf(time * 1000);
+    gsap.ticker.add(updateLenis);
+
+    return () => {
+      gsap.ticker.remove(updateLenis);
+      unsubscribe();
+      lenis.destroy();
+    };
+  }, [activeModule, prefersReducedMotion]);
 
   const registerSecretClick = useCallback(() => {
     const now = performance.now();
@@ -1290,11 +1209,6 @@ export default function Galaxia({
       const timeout = window.setTimeout(() => setIsLoading(false), 650);
       return () => window.clearTimeout(timeout);
     }
-
-    const interval = window.setInterval(() => {
-      setLoadingProgress((progress) => Math.min(94, progress + Math.max(1, (94 - progress) * 0.035)));
-    }, 35);
-    return () => window.clearInterval(interval);
   }, [sceneReady]);
 
   const openModule = useCallback((module) => {
@@ -1388,7 +1302,6 @@ export default function Galaxia({
     }
     setIsFlying(false);
   };
-  const displayedProgress = sceneReady ? 100 : loadingProgress;
   const handlePerformanceDecline = useCallback(() => {
     setDpr(1);
     setIsPerformanceLow(true);
@@ -1407,10 +1320,11 @@ export default function Galaxia({
       {/* Canvas 3D de la Galaxia */}
       <div
         ref={canvasShellRef}
-        className="absolute inset-0"
+        className="absolute inset-0 isolate"
         style={{ pointerEvents: isCinematicExit ? 'none' : 'auto' }}
       >
-      <Canvas dpr={dpr} camera={{ position: [0, 6, 16], fov: 60 }}>
+      {!isIntro && <CodeRainCanvas paused={prefersReducedMotion} />}
+      <Canvas className="relative z-10" dpr={dpr} gl={{ alpha: true }} camera={{ position: [0, 6, 16], fov: 60 }}>
         <PerformanceMonitor
           flipflops={3}
           onDecline={handlePerformanceDecline}
@@ -1454,12 +1368,11 @@ export default function Galaxia({
         {!isIntro && (
           <EffectComposer>
             <Bloom
-              luminanceThreshold={0.4}
-              luminanceSmoothing={0.22}
-              intensity={isCinematicExit ? bloomIntensity : isPerformanceLow ? 0.14 : 0.28}
+              luminanceThreshold={0.8}
+              luminanceSmoothing={0.16}
+              intensity={isCinematicExit ? bloomIntensity : isPerformanceLow ? 0.08 : 0.12}
               mipmapBlur={!isPerformanceLow}
             />
-            {!isPerformanceLow && <ChromaticAberration offset={CHROMATIC_ABERRATION_OFFSET} />}
           </EffectComposer>
         )}
         <Butterfly
@@ -1472,8 +1385,6 @@ export default function Galaxia({
         <GoldenSecretParticles active={isSecretActive && !prefersReducedMotion} paused={prefersReducedMotion} />
 
         <group visible={!isIntro}>
-        <CosmicBackdrop paused={prefersReducedMotion} />
-
         <Suspense fallback={null}>
           <SceneReady onReady={() => setSceneReady(true)} />
           <group ref={coreRef} onClick={handleCoreClick} onPointerOver={handleObjectHover} onPointerOut={handleObjectPointerOut}>
@@ -1608,27 +1519,19 @@ export default function Galaxia({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.65, ease: 'easeOut' }}
             className="absolute inset-0 z-[80] flex items-center justify-center bg-[#030008] font-mono text-white"
-            aria-label="Cargando experiencia galáctica"
+            aria-label="Mi galaxia creativa"
             aria-live="polite"
           >
-            <div className="w-[min(22rem,78vw)]">
-              <p className="mb-2 text-center text-[10px] tracking-[0.35em] text-cyan-200/70">
-                INGRESANDO A MI PORTAFOLIO
-              </p>
-              <h2 className="mb-7 text-center text-2xl font-bold tracking-[0.18em]">
-                GABY EDWIN
-              </h2>
-              <div className="h-1 overflow-hidden rounded-full bg-white/10">
-                <motion.div
-                  className="h-full rounded-full bg-gradient-to-r from-orange-400 via-cyan-300 to-cyan-100 shadow-[0_0_15px_#00f2fe]"
-                  animate={{ width: `${displayedProgress}%` }}
-                  transition={{ duration: 0.18, ease: 'easeOut' }}
-                />
-              </div>
-              <p className="mt-3 text-center text-[9px] tracking-[0.25em] text-cyan-100/60">
-                {sceneReady ? 'UNIVERSO LISTO' : 'SINCRONIZANDO ESTRELLAS'} · {Math.round(displayedProgress)}%
-              </p>
-            </div>
+            <motion.h2
+              initial={{ opacity: 0, y: 6 }}
+              animate={prefersReducedMotion ? { opacity: 1, y: 0 } : { opacity: [0.65, 1, 0.78, 1], y: [6, 0, 0, 0] }}
+              transition={prefersReducedMotion
+                ? { duration: 0.25 }
+                : { duration: 2.2, ease: 'easeInOut', repeat: Infinity }}
+              className="text-center text-sm font-medium tracking-[0.24em] text-cyan-50 sm:text-base"
+            >
+              MI GALAXIA CREATIVA
+            </motion.h2>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1655,7 +1558,11 @@ export default function Galaxia({
               role="dialog"
               aria-modal="true"
               aria-label={`Sección: ${MODULE_LABELS[activeModule] ?? activeModule}`}
-              className={`relative max-h-[min(86vh,56rem)] ${activeModule === 'CONTACTO' ? 'w-[min(92vw,28rem)]' : 'w-[min(92vw,52rem)]'} select-text overflow-y-auto border border-white/15 bg-[#070a14]/90 p-5 font-mono text-white shadow-[0_20px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl sm:p-8 md:p-10`}
+              className={`relative max-h-[min(86dvh,56rem)] ${activeModule === 'CONTACTO' ? 'w-[min(92vw,28rem)]' : 'w-[min(92vw,52rem)]'} select-text overflow-hidden font-mono text-white ${
+                activeModule === 'CREDENCIALES'
+                  ? 'rounded-3xl border border-white/15 bg-[#070a14]/80 shadow-[0_20px_100px_rgba(0,0,0,0.7)] backdrop-blur-xl'
+                  : 'border border-white/15 bg-[#070a14]/90 shadow-[0_20px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl'
+              }`}
               onClick={(event) => event.stopPropagation()}
               onKeyDown={(event) => {
                 if (event.key !== 'Tab') return;
@@ -1682,10 +1589,12 @@ export default function Galaxia({
             >
               [✕]
             </button>
-            <div className="mb-7 flex items-center justify-between border-b border-white/10 pb-3 pr-16 text-[10px] uppercase tracking-[0.16em] text-white/50">
-              <span>Sección</span>
-              <span>{MODULE_LABELS[activeModule] ?? activeModule}</span>
-            </div>
+            <div
+              ref={dialogScrollRef}
+              className={`max-h-[min(86dvh,56rem)] overscroll-y-contain overflow-y-auto p-4 pt-12 sm:p-8 sm:pt-12 md:p-10 md:pt-12 ${
+                activeModule === 'CREDENCIALES' ? 'credentials-dialog' : ''
+              }`}
+            >
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={activeModule}
@@ -1697,22 +1606,31 @@ export default function Galaxia({
             {activeModule === 'NUCLEO' && (
               <div className="space-y-6">
                 <header className="border-b border-orange-200/15 pb-5">
-                  <p className="mb-3 text-[9px] uppercase tracking-[0.22em] text-orange-200/75">Perfil & Stack</p>
                   <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Hola, soy Gaby</h2>
-                  <p className="mt-2 text-sm text-orange-100/80">Artista digital y desarrolladora frontend.</p>
+                  <p className="mt-2 text-sm text-orange-100/80">Desarrollo web creativo.</p>
                 </header>
                 <section className="space-y-3">
                   <p className="text-sm leading-relaxed text-slate-200">
                     Uno la sensibilidad visual del arte digital con la lógica del código para crear experiencias web cuidadas, intuitivas y con personalidad.
                   </p>
                   <p className="text-xs leading-relaxed text-slate-400">
-                    Mi formación en Arte Digital y Multimedia se complementa con experiencia en diseño UI/UX, desarrollo con React y gestión de proyectos creativos.
+                    Mi recorrido combina desarrollo frontend, diseño UI/UX y gestión de proyectos creativos.
                   </p>
                 </section>
-                <section className="border-y border-white/10 py-4">
-                  <h3 className="mb-3 text-[9px] uppercase tracking-[0.2em] text-orange-100/55">Lo que inspira mi trabajo</h3>
-                  <p className="text-xs leading-relaxed text-slate-300">
-                    La observación del cielo, la naturaleza y las mariposas alimentan mi curiosidad y mi manera de pensar interfaces: con atención al detalle, movimiento y armonía.
+                <section className="group relative overflow-hidden rounded-2xl border border-orange-100/10 bg-gradient-to-br from-orange-100/[0.045] via-white/[0.015] to-transparent p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-orange-100/25 hover:shadow-[0_0_28px_rgba(251,191,36,0.08)]">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-[9px] uppercase tracking-[0.2em] text-orange-100/60 transition-colors duration-300 group-hover:text-orange-100/85">
+                      Lo que inspira mi trabajo
+                    </h3>
+                    <Sparkles
+                      aria-hidden="true"
+                      size={15}
+                      strokeWidth={1.5}
+                      className="shrink-0 text-orange-100/45 transition duration-300 group-hover:rotate-12 group-hover:scale-110 group-hover:text-orange-100/80"
+                    />
+                  </div>
+                  <p className="text-xs leading-relaxed text-slate-300 transition duration-300 group-hover:text-slate-100 group-hover:drop-shadow-[0_0_8px_rgba(255,237,213,0.16)]">
+                    Rodeada por la inmensidad del litoral argentino —la selva misionera, el horizonte del río y la claridad de los cielos—, encuentro en cada pequeño detalle de la naturaleza una fuente constante. Traduzco esa atmósfera en interfaces vivas que equilibran la fluidez visual y la precisión del código.
                   </p>
                 </section>
                 <div className="flex flex-wrap gap-2" aria-label="Áreas de trabajo">
@@ -1726,7 +1644,7 @@ export default function Galaxia({
                   <div>
                     <h3 className="text-[10px] uppercase tracking-[0.2em] text-orange-100/65">Stack tecnológico & arquitectura</h3>
                     <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
-                      Herramientas que dan vida a experiencias web interactivas, visuales y responsivas.
+                      Tecnologías y enfoques que uso para construir estas experiencias.
                     </p>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -1797,45 +1715,46 @@ export default function Galaxia({
             {activeModule === 'ASTROFOTOS' && (
               <div className="space-y-6">
                 <header className="border-b border-cyan-200/10 pb-5">
-                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-cyan-200/70">Astrofotografía / 03</p>
+                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-cyan-200/70">Mi hobby · exploración del cielo</p>
                   <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Astrofotografía</h2>
                   <p className="mt-2 text-sm text-slate-300">Una colección personal de observaciones del cielo nocturno.</p>
                 </header>
                 <section
                   role="status"
-                  className="border border-cyan-100/15 bg-gradient-to-br from-cyan-300/[0.07] via-white/[0.02] to-transparent p-6 text-center sm:p-9"
+                  className="relative isolate overflow-hidden rounded-3xl border border-cyan-100/15 bg-gradient-to-br from-cyan-300/[0.08] via-white/[0.025] to-[#050914]/80 p-6 text-center shadow-[0_18px_60px_rgba(8,145,178,0.08)] sm:p-9"
                 >
-                  <span className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-full border border-cyan-100/20 text-2xl text-cyan-100/80" aria-hidden="true">
-                    ✦
-                  </span>
-                  <h3 className="text-lg font-medium text-white">La colección está en preparación</h3>
+                  <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 opacity-60">
+                    <span className="absolute left-[18%] top-[24%] h-1 w-1 rounded-full bg-cyan-100 shadow-[0_0_12px_rgba(165,243,252,0.9)]" />
+                    <span className="absolute right-[20%] top-[31%] h-1.5 w-1.5 rounded-full bg-cyan-100/70 shadow-[0_0_14px_rgba(165,243,252,0.75)]" />
+                    <span className="absolute bottom-[24%] left-[28%] h-1 w-1 rounded-full bg-cyan-100/70" />
+                    <span className="absolute bottom-[28%] right-[30%] h-1 w-1 rounded-full bg-cyan-100 shadow-[0_0_10px_rgba(165,243,252,0.8)]" />
+                    <div className="absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan-300/[0.08] blur-3xl" />
+                  </div>
+                  <Sparkles aria-hidden="true" className="mx-auto mb-4 text-cyan-100/80" size={30} strokeWidth={1.4} />
+                  <h3 className="text-lg font-medium text-white">Próximamente</h3>
                   <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-slate-300">
-                    Este proyecto todavía no incluye astrofotografías personales. Cuando agregues tus capturas, aparecerán aquí sin confundirlas con las texturas ilustrativas de la escena.
+                    Pronto compartiré aquí mis observaciones del cielo nocturno.
                   </p>
                 </section>
-                <p className="border-l border-cyan-100/25 pl-4 text-[10px] leading-relaxed text-white/45">
-                  Texturas cartográficas de la escena: ejemplos de planetas de Three.js. No son fotografías personales.
-                </p>
               </div>
             )}
 
             {activeModule === 'CREDENCIALES' && (
               <div className="space-y-6">
                 <header className="border-b border-amber-200/10 pb-5">
-                  <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-amber-200/70">Formación / 02</p>
                   <h2 className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">Formación y certificaciones</h2>
-                  <p className="mt-2 text-sm text-slate-300">Estudios universitarios y cursos realizados.</p>
                 </header>
                 <section>
-                  <h3 className="mb-3 text-[10px] uppercase tracking-[0.2em] text-amber-100/65">Títulos universitarios</h3>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {[
                       ['Licenciatura en Arte Digital y Multimedia', 'TECH Universidad Tecnológica'],
-                      ['Máster en Inteligencia Artificial en Diseño', 'TECH'],
                     ].map(([title, institution]) => (
-                      <article key={title} className="border border-white/10 bg-white/[0.025] p-4">
-                        <h4 className="text-sm leading-relaxed text-slate-100">{title}</h4>
-                        <p className="mt-2 text-xs leading-relaxed text-amber-100/70">{institution}</p>
+                      <article
+                        key={title}
+                        className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 transition duration-300 hover:-translate-y-0.5 hover:border-amber-100/30 hover:bg-amber-100/[0.045] hover:shadow-[0_12px_36px_rgba(251,191,36,0.07)]"
+                      >
+                        <h4 className="text-sm font-medium leading-relaxed tracking-tight text-slate-100">{title}</h4>
+                        <p className="mt-2 text-xs leading-relaxed text-amber-100/75">{institution}</p>
                       </article>
                     ))}
                   </div>
@@ -1848,14 +1767,18 @@ export default function Galaxia({
                       ['React.js', 'Coderhouse'],
                       ['JavaScript', 'Coderhouse'],
                       ['Intérprete certificada de LSA', 'UNaM · Humanidades'],
+                      ['Bellas Artes: talleres de Mosaiquismo, Vitrofusión y Cerámica', 'Artes del Fuego · Parque del Conocimiento'],
+                      ['Curso de Divulgación científica en Astronomía', 'Universidad Nacional de La Plata (UNLP)'],
                     ].map(([title, institution]) => (
-                      <article key={title} className="border border-white/10 bg-white/[0.025] p-4">
-                        <h4 className="text-sm text-slate-100">{title}</h4>
-                        <p className="mt-2 text-xs leading-relaxed text-amber-100/70">{institution}</p>
+                      <article
+                        key={title}
+                        className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 transition duration-300 hover:-translate-y-0.5 hover:border-amber-100/30 hover:bg-amber-100/[0.045] hover:shadow-[0_12px_36px_rgba(251,191,36,0.07)]"
+                      >
+                        <h4 className="text-sm font-medium leading-relaxed tracking-tight text-slate-100">{title}</h4>
+                        <p className="mt-2 text-xs leading-relaxed text-amber-100/75">{institution}</p>
                       </article>
                     ))}
                   </div>
-                  <p className="mt-3 text-xs leading-relaxed text-slate-300">Graduada en el top 10% de su cohorte.</p>
                 </section>
               </div>
             )}
@@ -1863,9 +1786,8 @@ export default function Galaxia({
             {activeModule === 'PROYECTOS' && (
               <ProjectCarousel selectedIndex={selectedProjectIndex} onSelect={setSelectedProjectIndex}>
                 <header className="border-b border-purple-200/10 pb-4">
-                  <p className="mb-2 text-[10px] uppercase tracking-[0.22em] text-purple-200/70">Proyectos / 01</p>
                   <h2 className="text-2xl font-semibold tracking-[-0.05em] text-white sm:text-3xl">Proyectos destacados</h2>
-                  <p className="mt-2 text-sm text-slate-300">Explora el alcance, mi aporte y las herramientas de cada proyecto.</p>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-300">Desarrollo, diseño y experimentación visual.</p>
                 </header>
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
@@ -1874,7 +1796,7 @@ export default function Galaxia({
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -16 }}
                     transition={{ duration: 0.2 }}
-                    className="min-h-52 border border-white/10 bg-gradient-to-br from-purple-400/10 via-[#070a14] to-cyan-300/5 p-5 sm:p-7"
+                    className="min-h-52 border border-white/10 bg-gradient-to-br from-purple-400/10 via-[#070a14] to-cyan-300/5 p-4 sm:p-7"
                     aria-live="polite"
                     aria-atomic="true"
                   >
@@ -1913,15 +1835,20 @@ export default function Galaxia({
                         </span>
                       ))}
                     </div>
-                    {PROJECTS[selectedProjectIndex].url && (
+                    {PROJECTS[selectedProjectIndex].url ? (
                       <a
                         href={PROJECTS[selectedProjectIndex].url}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-6 inline-flex min-h-11 items-center border border-purple-200/40 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-purple-100 transition hover:border-purple-100/80 hover:bg-purple-200/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200"
+                        aria-label={`Visitar ${PROJECTS[selectedProjectIndex].title}; se abre en una pestaña nueva`}
+                        className="mt-6 inline-flex min-h-11 touch-manipulation items-center border border-purple-200/40 px-4 py-2 text-[11px] uppercase tracking-[0.12em] text-purple-100 transition hover:border-purple-100/80 hover:bg-purple-200/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200"
                       >
                         Visitar proyecto ↗
                       </a>
+                    ) : (
+                      <p className="mt-6 text-xs leading-relaxed text-slate-400">
+                        Prototipo conceptual · sin sitio publicado
+                      </p>
                     )}
                   </motion.div>
                 </AnimatePresence>
@@ -1931,7 +1858,7 @@ export default function Galaxia({
                     data-cursor
                     onClick={() => setSelectedProjectIndex((index) => (index + PROJECTS.length - 1) % PROJECTS.length)}
                     aria-label="Ver proyecto anterior"
-                    className="flex min-h-11 min-w-11 items-center justify-center border border-white/15 px-2 py-2 text-xs text-white/80 transition hover:border-purple-200/60 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:px-4 sm:text-sm"
+                    className="flex min-h-11 min-w-11 touch-manipulation items-center justify-center border border-white/15 px-2 py-2 text-xs text-white/80 transition hover:border-purple-200/60 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:px-4 sm:text-sm"
                   >
                     <span className="sm:hidden" aria-hidden="true">←</span>
                     <span className="hidden sm:inline">← Anterior</span>
@@ -1945,7 +1872,7 @@ export default function Galaxia({
                         onClick={() => setSelectedProjectIndex(index)}
                         aria-label={`Ver ${project.title}`}
                         aria-pressed={selectedProjectIndex === index}
-                        className="group flex h-9 w-9 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:h-11 sm:w-11"
+                        className="group flex h-11 w-11 touch-manipulation items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200"
                       >
                         <span
                           aria-hidden="true"
@@ -1959,7 +1886,7 @@ export default function Galaxia({
                     data-cursor
                     onClick={() => setSelectedProjectIndex((index) => (index + 1) % PROJECTS.length)}
                     aria-label="Ver proyecto siguiente"
-                    className="flex min-h-11 min-w-11 items-center justify-center border border-white/15 px-2 py-2 text-xs text-white/80 transition hover:border-purple-200/60 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:px-4 sm:text-sm"
+                    className="flex min-h-11 min-w-11 touch-manipulation items-center justify-center border border-white/15 px-2 py-2 text-xs text-white/80 transition hover:border-purple-200/60 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-200 sm:px-4 sm:text-sm"
                   >
                     <span className="sm:hidden" aria-hidden="true">→</span>
                     <span className="hidden sm:inline">Siguiente →</span>
@@ -2005,57 +1932,6 @@ export default function Galaxia({
                     className="border border-cyan-200/30 px-3 py-2 text-[9px] uppercase tracking-[0.12em] text-cyan-100 transition-colors hover:border-cyan-100/70 hover:bg-cyan-200/5"
                   >
                     Visitar nowinespecias.com ↗
-                  </a>
-                  <button 
-                    onClick={closeModule}
-                    className="px-3 py-2 text-[9px] uppercase tracking-[0.12em] text-white/45 transition-colors hover:text-white"
-                  >
-                    Cerrar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* CONTENIDO MÓDULO SNJA (Artes del Fuego) */}
-            {activeModule === 'SNJA' && (
-              <div className="space-y-4">
-                <span className="block border-b border-orange-200/10 pb-3 text-[9px] uppercase tracking-[0.2em] text-orange-100/60">
-                  // Módulo Gestión & Cerámica
-                </span>
-                <ProjectTitlePreview
-                  title="Artes del Fuego"
-                  role="Administración · Coordinación operativa"
-                  category="Gestión & cerámica"
-                  accent="#ff9b70"
-                  index="02 / 05"
-                  technologies={['React', 'Vite', 'Tailwind CSS', 'Firebase', 'Inventario']}
-                />
-                <p className="border-t border-white/10 pt-4 text-xs leading-relaxed text-slate-300">
-                  Encargada Administrativa y Coordinación Operativa en el Parque del Conocimiento.
-                </p>
-                <motion.div
-                  variants={staggerContainerVariants}
-                  initial="hidden"
-                  animate="visible"
-                  className="grid gap-px border border-white/10 bg-white/10 sm:grid-cols-2"
-                >
-                  <motion.div variants={staggerItemVariants} className="bg-[#070a14] p-3">
-                    <h3 className="mb-2 text-[8px] uppercase tracking-[0.18em] text-orange-100/55">Aplicación web</h3>
-                    <p className="text-[10px] leading-relaxed text-slate-300">Sistema de inventario y gestión de stock desarrollado en React, Vite, Tailwind CSS y Firebase.</p>
-                  </motion.div>
-                  <motion.div variants={staggerItemVariants} className="bg-[#070a14] p-3">
-                    <h3 className="mb-2 text-[8px] uppercase tracking-[0.18em] text-orange-100/55">Enfoque artístico</h3>
-                    <p className="text-[10px] leading-relaxed text-slate-300">Cerámica de alta temperatura (gres), alfarería y gestión de talleres culturales.</p>
-                  </motion.div>
-                </motion.div>
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
-                  <a
-                    href="https://artesdelfuego.vercel.app"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="border border-orange-200/30 px-3 py-2 text-[9px] uppercase tracking-[0.12em] text-orange-100 transition-colors hover:border-orange-100/70 hover:bg-orange-200/5"
-                  >
-                    artesdelfuego.vercel.app ↗
                   </a>
                   <button 
                     onClick={closeModule}
@@ -2116,7 +1992,6 @@ export default function Galaxia({
             {activeModule === 'CONTACTO' && (
               <div className="space-y-4">
                 <header className="mb-5 border-b border-cyan-200/10 pb-4">
-                  <p className="mb-2 text-[10px] uppercase tracking-[0.22em] text-cyan-100/70">Satélite de comunicaciones</p>
                   <h2 className="text-2xl font-semibold tracking-[-0.05em] text-white">Conectemos</h2>
                   <p className="mt-2 text-sm leading-relaxed text-slate-300">Elige cómo te gustaría iniciar la conversación.</p>
                 </header>
@@ -2169,6 +2044,7 @@ export default function Galaxia({
 
               </motion.div>
             </AnimatePresence>
+            </div>
             </motion.section>
           </motion.aside>
         )}

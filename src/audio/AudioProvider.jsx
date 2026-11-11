@@ -11,6 +11,8 @@ const AUDIO_EFFECTS = {
   galaxy: { source: '/audio/ingresandoagalaxia.mp3', volume: 0.24 },
 };
 
+const GALAXY_AMBIENT_VOLUME = 0.07;
+
 function getStoredMutePreference() {
   try {
     if (typeof window === 'undefined') return false;
@@ -181,7 +183,7 @@ export function AudioProvider({ children }) {
     const ambientGain = audioContext.createGain();
     ambientGain.gain.value = sceneRef.current === 'realWorld' ? 1 : 0;
     const galaxyGain = audioContext.createGain();
-    galaxyGain.gain.value = sceneRef.current === 'galaxy' ? 0.18 : 0;
+    galaxyGain.gain.value = sceneRef.current === 'galaxy' ? GALAXY_AMBIENT_VOLUME : 0;
     const galaxyFallbackGain = audioContext.createGain();
     galaxyFallbackGain.gain.value = 0;
     const droneFilter = audioContext.createBiquadFilter();
@@ -257,7 +259,7 @@ export function AudioProvider({ children }) {
     natureGain.setValueAtTime(natureGain.value, now);
     spaceGain.setValueAtTime(spaceGain.value, now);
     natureGain.linearRampToValueAtTime(sceneRef.current === 'realWorld' ? 1 : 0, now + 1.8);
-    spaceGain.linearRampToValueAtTime(sceneRef.current === 'galaxy' ? 0.18 : 0, now + 1.8);
+    spaceGain.linearRampToValueAtTime(sceneRef.current === 'galaxy' ? GALAXY_AMBIENT_VOLUME : 0, now + 1.8);
   }, [startGalaxyAudio, stopIntroAudio, stopTrainPassing, stopWalkingAudio]);
 
   const playAudioEffect = useCallback((effect) => {

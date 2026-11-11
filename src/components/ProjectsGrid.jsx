@@ -8,12 +8,6 @@ const projects = [
     tags: ["React", "Tailwind", "Firebase", "Retool"]
   },
   {
-    title: "Artes del Fuego - Sistema de Inventario",
-    category: "Gestión & Taller de Arte",
-    description: "Plataforma web desarrollada para el control de inventario de materiales cerámicos, hornos y herramientas del taller.",
-    tags: ["React.js", "UI/UX Design", "Vercel"]
-  },
-  {
     title: "Interfaces Espaciales & Dashboards",
     category: "Diseño UI/UX Avanzado",
     description: "Prototipos interactivos y componentes altamente animados inspirados en la astronomía y la observación estelar.",
@@ -33,7 +27,7 @@ export default function ProjectsGrid() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         {projects.map((project, index) => (
           <div 
             key={index}
