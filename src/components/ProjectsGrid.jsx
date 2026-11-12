@@ -7,12 +7,6 @@ const projects = [
     description: "Aplicación web completa para gestión de stock y ventas de especias, con integración de paneles administrativos y pasarela de datos.",
     tags: ["React", "Tailwind", "Firebase", "Retool"]
   },
-  {
-    title: "Interfaces Espaciales & Dashboards",
-    category: "Diseño UI/UX Avanzado",
-    description: "Prototipos interactivos y componentes altamente animados inspirados en la astronomía y la observación estelar.",
-    tags: ["Figma", "Framer Motion", "GSAP"]
-  }
 ];
 
 export default function ProjectsGrid() {
@@ -27,7 +21,7 @@ export default function ProjectsGrid() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div className="mx-auto grid max-w-2xl grid-cols-1 gap-8">
         {projects.map((project, index) => (
           <div 
             key={index}

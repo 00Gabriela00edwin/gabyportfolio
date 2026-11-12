@@ -42,11 +42,8 @@ export default function IntroSplash({ onEnter }) {
 
     letterAnimationsRef.current = welcomeLettersRef.current.map((element) => {
       if (!element) return null;
-      const bounds = element.getBoundingClientRect();
       return {
         element,
-        centerX: bounds.left + bounds.width / 2,
-        centerY: bounds.top + bounds.height / 2,
         x: gsap.quickTo(element, 'x', { duration: 0.22, ease: 'power2.out' }),
         y: gsap.quickTo(element, 'y', { duration: 0.22, ease: 'power2.out' }),
         scale: gsap.quickTo(element, 'scale', { duration: 0.22, ease: 'power2.out' }),
@@ -68,22 +65,29 @@ export default function IntroSplash({ onEnter }) {
   const handleWelcomePointerEnter = (event) => {
     if (shouldReduceMotion || event.pointerType === 'touch') return;
 
-    letterAnimationsRef.current.forEach((animation) => {
+    letterAnimationsRef.current.forEach((animation, index) => {
       if (!animation) return;
       const bounds = animation.element.getBoundingClientRect();
-      animation.centerX = bounds.left + bounds.width / 2;
-      animation.centerY = bounds.top + bounds.height / 2;
+      animation.centerX = bounds.left + bounds.width / 2 - Number(gsap.getProperty(animation.element, 'x'));
+      animation.centerY = bounds.top + bounds.height / 2 - Number(gsap.getProperty(animation.element, 'y'));
       animation.x(0);
       animation.y(0);
       animation.scale(1);
-      animation.element.style.textShadow = 'none';
+      gsap.killTweensOf(animation.element, 'filter');
+      gsap.fromTo(
+        animation.element,
+        { filter: 'brightness(1.8)' },
+        { filter: 'brightness(1)', duration: 0.55, delay: index * 0.012, ease: 'power2.out', overwrite: 'auto' },
+      );
     });
+
+    handleWelcomePointerMove(event);
   };
 
   const handleWelcomePointerMove = (event) => {
     if (shouldReduceMotion || event.pointerType === 'touch') return;
 
-    const radius = 76;
+    const radius = 104;
     const letterInfluences = letterAnimationsRef.current.map((animation) => {
       if (!animation) return;
       const { centerX, centerY } = animation;
@@ -100,8 +104,8 @@ export default function IntroSplash({ onEnter }) {
       const { animation, deltaX, deltaY, distance, influence } = entry;
       const { element, x, y, scale } = animation;
       scale(1 + influence * 0.5);
-      x(distance ? (deltaX / distance) * influence * 12 : 0);
-      y(distance ? (deltaY / distance) * influence * 12 : 0);
+      x(distance ? (deltaX / distance) * influence * 16 : 0);
+      y(distance ? (deltaY / distance) * influence * 16 : 0);
       element.style.textShadow = influence
         ? `0 0 ${4 + influence * 10}px rgba(165, 243, 252, ${0.2 + influence * 0.45})`
         : 'none';
@@ -116,6 +120,9 @@ export default function IntroSplash({ onEnter }) {
       animation.x.tween.kill();
       animation.y.tween.kill();
       animation.scale.tween.kill();
+      gsap.killTweensOf(animation.element, 'filter');
+      animation.element.style.filter = 'none';
+      animation.element.style.textShadow = 'none';
       gsap.to(animation.element, {
         x: 0,
         y: 0,

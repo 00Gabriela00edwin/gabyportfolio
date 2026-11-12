@@ -48,14 +48,6 @@ const PROJECTS = [
     accent: '#00f2fe',
   },
   {
-    title: 'Interfaces & Dashboards',
-    category: 'Diseño UI/UX',
-    contribution: 'Diseño UI/UX · prototipado interactivo.',
-    description: 'Prototipos interactivos y componentes animados inspirados en la astronomía y la observación estelar.',
-    technologies: ['Figma', 'Framer Motion', 'GSAP'],
-    accent: '#c084fc',
-  },
-  {
     title: 'Astronomía aficionada',
     category: 'Astronomía & divulgación',
     contribution: 'Exploración y divulgación astronómica.',
@@ -326,9 +318,23 @@ function Earth({ paused }) {
 function OrbitingMoon({ paused, focusRef, onSelect, onPointerOver, onPointerOut }) {
   const orbitRef = useRef(null);
   const moonRef = useRef(null);
+  const orbitPath = useMemo(() => {
+    const positions = [];
+    const dotCount = 144;
+    const radius = 3.76;
+    for (let index = 0; index < dotCount; index += 1) {
+      const angle = (index / dotCount) * Math.PI * 2;
+      positions.push(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+    }
+
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+    return geometry;
+  }, []);
   const [surfaceTexture] = useLoader(TextureLoader, ['/textures/celestial/moon_1024.jpg']);
   const surfaceMap = useMemo(() => cloneSRGBTexture(surfaceTexture), [surfaceTexture]);
   useEffect(() => () => surfaceMap.dispose(), [surfaceMap]);
+  useEffect(() => () => orbitPath.dispose(), [orbitPath]);
 
   useFrame((_, delta) => {
     if (paused) return;
@@ -338,10 +344,30 @@ function OrbitingMoon({ paused, focusRef, onSelect, onPointerOver, onPointerOut 
 
   return (
     <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[3.75, 3.77, 96]} />
-        <meshBasicMaterial color="#b9d8ff" transparent opacity={0.18} depthWrite={false} />
-      </mesh>
+      <points geometry={orbitPath}>
+        <pointsMaterial
+          color="#a9d8ee"
+          size={0.045}
+          sizeAttenuation
+          transparent
+          opacity={0.58}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </points>
+      {Array.from({ length: 8 }, (_, index) => {
+        const angle = (index / 8) * Math.PI * 2;
+        return (
+          <mesh
+            key={index}
+            position={[Math.cos(angle) * 3.76, 0, Math.sin(angle) * 3.76]}
+            scale={index % 2 === 0 ? 1 : 0.72}
+          >
+            <octahedronGeometry args={[0.07, 0]} />
+            <meshBasicMaterial color={index % 2 === 0 ? '#c1f3ff' : '#f5d6a0'} toneMapped={false} />
+          </mesh>
+        );
+      })}
       <group ref={orbitRef}>
         <group
           ref={focusRef}
@@ -1105,7 +1131,6 @@ export default function Galaxia({
   );
   const [cameraResetKey, setCameraResetKey] = useState(0);
   const [sceneReady, setSceneReady] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [isCinematicExit, setIsCinematicExit] = useState(false);
   const [bloomIntensity, setBloomIntensity] = useState(0.42);
   const [dpr, setDpr] = useState(
@@ -1203,13 +1228,6 @@ export default function Galaxia({
   useEffect(() => () => {
     if (secretTimeoutRef.current !== null) window.clearTimeout(secretTimeoutRef.current);
   }, []);
-
-  useEffect(() => {
-    if (sceneReady) {
-      const timeout = window.setTimeout(() => setIsLoading(false), 650);
-      return () => window.clearTimeout(timeout);
-    }
-  }, [sceneReady]);
 
   const openModule = useCallback((module) => {
     if (!dialogRef.current?.contains(document.activeElement)) {
@@ -1510,31 +1528,6 @@ export default function Galaxia({
           </div>
         </>
       )}
-
-      <AnimatePresence>
-        {isLoading && !isIntro && (
-          <motion.div
-            initial={{ opacity: 1 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.65, ease: 'easeOut' }}
-            className="absolute inset-0 z-[80] flex items-center justify-center bg-[#030008] font-mono text-white"
-            aria-label="Mi galaxia creativa"
-            aria-live="polite"
-          >
-            <motion.h2
-              initial={{ opacity: 0, y: 6 }}
-              animate={prefersReducedMotion ? { opacity: 1, y: 0 } : { opacity: [0.65, 1, 0.78, 1], y: [6, 0, 0, 0] }}
-              transition={prefersReducedMotion
-                ? { duration: 0.25 }
-                : { duration: 2.2, ease: 'easeInOut', repeat: Infinity }}
-              className="text-center text-sm font-medium tracking-[0.24em] text-cyan-50 sm:text-base"
-            >
-              MI GALAXIA CREATIVA
-            </motion.h2>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* --- PANEL LATERAL DE INFORMACIÓN --- */}
       <AnimatePresence>

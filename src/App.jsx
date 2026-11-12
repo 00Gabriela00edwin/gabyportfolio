@@ -17,6 +17,7 @@ export default function App() {
         <PortfolioApp />
       </AudioProvider>
     </MotionConfig>
+    
   );
 }
 
@@ -41,16 +42,9 @@ function PortfolioApp() {
     setViewState('realWorld');
   }, [startAudio, stopIntroAudio]);
 
-  const handleEnterGalaxy = useCallback(() => {
+  const handleEnterGalaxy = useCallback((options) => {
     setGalaxyInitialModule(null);
-    playAudioEffect('galaxy');
-    setAudioScene('galaxy');
-    setViewState('galaxy');
-  }, [playAudioEffect, setAudioScene]);
-
-  const handleEnterCredentials = useCallback(() => {
-    setGalaxyInitialModule('CREDENCIALES');
-    playAudioEffect('galaxy');
+    if (!options?.audioAlreadyPlayed) playAudioEffect('galaxy');
     setAudioScene('galaxy');
     setViewState('galaxy');
   }, [playAudioEffect, setAudioScene]);
@@ -68,7 +62,6 @@ function PortfolioApp() {
           <RealWorldCollage
             key="real-world"
             onEnterGalaxy={handleEnterGalaxy}
-            onEnterCredentials={handleEnterCredentials}
           />
         )}
         {viewState === 'galaxy' && (

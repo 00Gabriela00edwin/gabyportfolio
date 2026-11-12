@@ -13,7 +13,24 @@ const TERRAIN_WIDTH = 34;
 const TERRAIN_DEPTH = 68;
 const TERRAIN_SEGMENTS_X = 190;
 const TERRAIN_SEGMENTS_Z = 210;
+const TERRAIN_CLIFF_BOTTOM_Y = -8;
 const GRASS_TUFT_COUNT = 34000;
+
+function CloudShape({ fill = 'rgba(7,18,27,0.78)' }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 -z-10 h-full w-full scale-110 overflow-visible drop-shadow-[0_6px_12px_rgba(0,0,0,0.28)]"
+      viewBox="0 0 324 142"
+      preserveAspectRatio="none"
+    >
+      <path
+        d="M37 126C18 126 7 115 7 101c0-13 10-23 25-25-7-17 1-37 18-44 15-7 32-2 41 10 6-20 27-31 47-27 17 3 28 16 30 32 11-16 29-22 46-16 17 5 27 21 24 38 19-9 42-1 48 18 21-4 39 9 39 27 0 16-14 27-34 27H37Z"
+        fill={fill}
+      />
+    </svg>
+  );
+}
 
 function SceneReady({ onReady }) {
   const hasReportedReady = useRef(false);
@@ -131,8 +148,8 @@ function pathCenter(z) {
 }
 
 function streamCenterZ(x) {
-  return -29.4 + Math.sin(x * 0.22) * 0.2
-    + Math.sin(x * 0.58) * 0.07;
+  return -29.4 + Math.sin(x * 0.22) * 0.42
+    + Math.sin(x * 0.58) * 0.12;
 }
 
 function branchTrailCenterX(z) {
@@ -145,6 +162,12 @@ function stationTrailCenterX(z) {
   const progress = THREE.MathUtils.smoothstep(z, -15.8, -12.4);
   return THREE.MathUtils.lerp(-13.55, pathCenter(-12.4), progress)
     - Math.sin(progress * Math.PI) * 0.8;
+}
+
+function trainTrailCenterX(z) {
+  const stationDetour = THREE.MathUtils.smoothstep(z, -18.2, -17.2)
+    * (1 - THREE.MathUtils.smoothstep(z, -14.1, -13.1));
+  return TRAIN_TRACK_X + 2.3 + stationDetour * 1.8;
 }
 
 function cabinTrailCenterX(z) {
@@ -170,16 +193,32 @@ const CABIN_LOCAL_Z = -8.4;
 const CABIN_FRONT_Z = CABIN_LOCAL_Z + 1 + 1.65;
 const CABIN_BACK_Z = CABIN_LOCAL_Z + 1 - 1.65;
 const TRAIN_TRACK_X = -15.2;
-const TRAIN_TRACK_CENTER_Z = -15.5;
+const TRAIN_RAIL_OFFSETS = [-0.55, 0.55];
 const TRAIN_STATION_POSITION = { x: -12.9, z: -15.5 };
 const TRAIN_TRIGGER_RADIUS = 5.2;
-const TRAIN_START_Z = -9.5;
-const TRAIN_END_Z = -21.5;
-const RIVERSIDE_TREE_POSITION = { x: -12.1, z: -10.7 };
+const TRAIN_START_Z = -5.6;
+const TRAIN_END_Z = -25.4;
+const TRAIN_TRACK_START_Z = TRAIN_START_Z + 3.25;
+const TRAIN_TRACK_END_Z = TRAIN_END_Z - 1.55;
+const TRAIN_TRACK_CENTER_Z = (TRAIN_TRACK_START_Z + TRAIN_TRACK_END_Z) / 2;
+const TRAIN_TRACK_SEGMENT_COUNT = 42;
+const TRAIN_TRACK_SEGMENT_SPACING = (
+  (TRAIN_TRACK_START_Z - TRAIN_TRACK_END_Z) / (TRAIN_TRACK_SEGMENT_COUNT - 1)
+);
+const RIVERSIDE_TREE_POSITION = { x: -12.4, z: -20.5 };
 const MOUNTAIN_SUMMIT = { x: 10.1, z: -23.2 };
 const MOUNTAIN_TRAIL_START_Z = -11.2;
 const CABIN_TRAIL_END_Z = CABIN_FRONT_Z - 1;
 const RIVER_CENTER_Z = -29.4;
+const STREAM_DUCK_COUNT = 4;
+const STREAM_DUCK_SPACING = 0.75;
+const MEADOW_HILLS = [
+  { x: -8, z: -17.8, height: 1.55, radiusX: 3.6, radiusZ: 2.9 },
+  { x: -6.8, z: -15.7, height: 1.15, radiusX: 2.8, radiusZ: 2.5 },
+  { x: 7.3, z: -10.5, height: 1.4, radiusX: 3.2, radiusZ: 2.5 },
+  { x: 15, z: -9.1, height: 1.45, radiusX: 2.4, radiusZ: 2.2 },
+  { x: 16.5, z: -4.8, height: 1, radiusX: 2.2, radiusZ: 1.9 },
+];
 const BRIDGE_CENTER_X = pathCenter(RIVER_CENTER_Z);
 const BRIDGE_CENTER_Z = streamCenterZ(BRIDGE_CENTER_X);
 const BRIDGE_DESTINATION_Z = BRIDGE_CENTER_Z - 2.4;
@@ -194,6 +233,14 @@ function mountainLiftAt(x, z) {
     + ridge * ridgeMask);
 }
 
+function meadowHillHeight(x, z) {
+  return MEADOW_HILLS.reduce((height, hill) => {
+    const horizontal = (x - hill.x) / hill.radiusX;
+    const depth = (z - hill.z) / hill.radiusZ;
+    return height + hill.height * Math.exp(-((horizontal * horizontal + depth * depth) * 1.35));
+  }, 0);
+}
+
 function terrainHeight(x, z) {
   const distanceFromPath = Math.abs(x - pathCenter(z));
   const bank = Math.exp(-1 * (((distanceFromPath - 1.85) / 0.7) ** 2)) * 0.78;
@@ -206,6 +253,10 @@ function terrainHeight(x, z) {
   const stationTrailGate = THREE.MathUtils.smoothstep(z, -15.95, -15.5)
     * (1 - THREE.MathUtils.smoothstep(z, -12.4, -11.9));
   const stationTrailCut = Math.exp(-((stationTrailDistance / 0.88) ** 4)) * stationTrailGate * 0.12;
+  const trainTrailDistance = Math.abs(x - trainTrailCenterX(z));
+  const trainTrailGate = THREE.MathUtils.smoothstep(z, TRAIN_TRACK_END_Z - 0.8, TRAIN_TRACK_END_Z)
+    * (1 - THREE.MathUtils.smoothstep(z, TRAIN_TRACK_START_Z, TRAIN_TRACK_START_Z + 0.8));
+  const trainTrailCut = Math.exp(-((trainTrailDistance / 0.9) ** 4)) * trainTrailGate * 0.12;
   const cabinDistance = Math.abs(x - cabinTrailCenterX(z));
   const cabinGate = THREE.MathUtils.smoothstep(z, CABIN_TRAIL_END_Z - 0.45, CABIN_TRAIL_END_Z)
     * (1 - THREE.MathUtils.smoothstep(z, 2.05, 2.7));
@@ -222,6 +273,8 @@ function terrainHeight(x, z) {
   const riverApproach = THREE.MathUtils.smoothstep(-z, 25.2, 29.2)
     * (1 - THREE.MathUtils.smoothstep(-z, 30.2, 33.2));
   const riverDescent = riverApproach * 0.52;
+  const lowerTerrace = THREE.MathUtils.smoothstep(-z, 20.8, 24.2)
+    * (1 - THREE.MathUtils.smoothstep(-z, 31.5, 34)) * 0.42;
   const mountainLift = mountainLiftAt(x, z);
   const furrows = Math.sin(x * 1.85 + z * 0.45 + Math.sin(z * 0.18) * 0.7)
     * Math.cos(z * 1.2 - x * 0.3) * 0.055;
@@ -230,8 +283,9 @@ function terrainHeight(x, z) {
     + Math.sin(x * 1.2 + z * 0.72) * Math.cos(z * 0.94 - x * 0.36) * 0.11
     + Math.sin(x * 3.7 + z * 2.8) * 0.035;
   const wheelRuts = Math.exp(-(((distanceFromPath - 0.34) / 0.1) ** 2)) * 0.035;
-  return -1.35 - z * 0.023 + bank - pathCut - branchCut - stationTrailCut - cabinCut - mountainCut
-    - riverCut + riverBank - riverDescent - wheelRuts + furrows + rollingGround + mountainLift;
+  return -1.35 - z * 0.023 + bank - pathCut - branchCut - stationTrailCut - trainTrailCut - cabinCut - mountainCut
+    - riverCut + riverBank - riverDescent - lowerTerrace - wheelRuts + furrows + rollingGround + mountainLift
+    + meadowHillHeight(x, z);
 }
 
 function bridgeDeckHeight(x, z) {
@@ -268,8 +322,8 @@ function createTerrainGeometry() {
   const colors = new Float32Array(count * 3);
   const uvs = new Float32Array(count * 2);
   const indices = [];
-  const soil = new THREE.Color('#874629');
-  const drySoil = new THREE.Color('#a96138');
+  const soil = new THREE.Color('#8b3a2b');
+  const drySoil = new THREE.Color('#9c4128');
   const field = new THREE.Color('#71804b');
   const fieldLight = new THREE.Color('#929565');
 
@@ -291,6 +345,11 @@ function createTerrainGeometry() {
         * (1 - THREE.MathUtils.smoothstep(z, -12.4, -11.8));
       const stationTrailBlend = (1 - THREE.MathUtils.smoothstep(stationTrailDistance, 0.72, 1.3))
         * stationTrailGate;
+      const trainTrailDistance = Math.abs(x - trainTrailCenterX(z));
+      const trainTrailGate = THREE.MathUtils.smoothstep(z, TRAIN_TRACK_END_Z - 0.8, TRAIN_TRACK_END_Z)
+        * (1 - THREE.MathUtils.smoothstep(z, TRAIN_TRACK_START_Z, TRAIN_TRACK_START_Z + 0.8));
+      const trainTrailBlend = (1 - THREE.MathUtils.smoothstep(trainTrailDistance, 0.72, 1.3))
+        * trainTrailGate;
       const cabinDistance = Math.abs(x - cabinTrailCenterX(z));
       const cabinGate = THREE.MathUtils.smoothstep(z, CABIN_TRAIL_END_Z - 0.45, CABIN_TRAIL_END_Z)
         * (1 - THREE.MathUtils.smoothstep(z, 2.05, 2.7));
@@ -310,6 +369,7 @@ function createTerrainGeometry() {
       const pathColor = soil.clone().lerp(drySoil, (variation + 1) * 0.16);
       const branchColor = soil.clone().lerp(new THREE.Color('#783b27'), (variation + 1) * 0.13);
       const stationTrailColor = soil.clone().lerp(new THREE.Color('#783b27'), (variation + 1) * 0.13);
+      const trainTrailColor = soil.clone().lerp(new THREE.Color('#783b27'), (variation + 1) * 0.13);
       const cabinColor = soil.clone().lerp(new THREE.Color('#783b27'), (variation + 1) * 0.13);
       const mountainTrailColor = soil.clone().lerp(new THREE.Color('#783b27'), (variation + 1) * 0.13);
       const mountainLift = mountainLiftAt(x, z);
@@ -323,6 +383,7 @@ function createTerrainGeometry() {
         .lerp(pathColor, pathBlend)
         .lerp(branchColor, branchBlend)
         .lerp(stationTrailColor, stationTrailBlend)
+        .lerp(trainTrailColor, trainTrailBlend)
         .lerp(cabinColor, cabinBlend)
         .lerp(mountainTrailColor, mountainTrailBlend);
 
@@ -350,10 +411,84 @@ function createTerrainGeometry() {
   return geometry;
 }
 
+function createTerrainCliffGeometry() {
+  const halfWidth = TERRAIN_WIDTH / 2;
+  const halfDepth = TERRAIN_DEPTH / 2;
+  const edges = [
+    { segments: 72, outward: [0, -1], point: (t) => ({ x: THREE.MathUtils.lerp(-halfWidth, halfWidth, t), z: -halfDepth }) },
+    { segments: 144, outward: [1, 0], point: (t) => ({ x: halfWidth, z: THREE.MathUtils.lerp(-halfDepth, halfDepth, t) }) },
+    { segments: 72, outward: [0, 1], point: (t) => ({ x: THREE.MathUtils.lerp(halfWidth, -halfWidth, t), z: halfDepth }) },
+    { segments: 144, outward: [-1, 0], point: (t) => ({ x: -halfWidth, z: THREE.MathUtils.lerp(halfDepth, -halfDepth, t) }) },
+  ];
+  const palette = ['#67483c', '#8b4a32', '#61534a', '#9c5a38'].map((color) => new THREE.Color(color));
+  const positions = [];
+  const colors = [];
+  const indices = [];
+
+  edges.forEach(({ segments, outward, point }, edgeIndex) => {
+    const edgeBase = positions.length / 3;
+    const rowSize = segments + 1;
+    for (let layer = 0; layer < 3; layer += 1) {
+      for (let index = 0; index <= segments; index += 1) {
+        const progress = index / segments;
+        const { x, z } = point(progress);
+        const topY = terrainHeight(x, z);
+        const edgeFade = Math.sin(progress * Math.PI);
+        const jagged = Math.sin(index * 1.91 + edgeIndex * 3.1) * 0.18 * edgeFade;
+        const offset = layer === 1 ? edgeFade * (0.12 + jagged * 0.35) : 0;
+        const y = layer === 0
+          ? topY + 0.025
+          : layer === 1
+            ? THREE.MathUtils.lerp(topY, TERRAIN_CLIFF_BOTTOM_Y, 0.46) + jagged * 0.3
+            : TERRAIN_CLIFF_BOTTOM_Y;
+        positions.push(x + outward[0] * offset, y, z + outward[1] * offset);
+
+        const color = palette[(index * 3 + layer * 5 + edgeIndex * 7) % palette.length]
+          .clone()
+          .multiplyScalar(layer === 2 ? 0.78 : layer === 1 ? 0.94 : 0.86);
+        colors.push(color.r, color.g, color.b);
+      }
+    }
+
+    for (let layer = 0; layer < 2; layer += 1) {
+      for (let index = 0; index < segments; index += 1) {
+        const upper = edgeBase + layer * rowSize + index;
+        const nextUpper = upper + 1;
+        const lower = upper + rowSize;
+        const nextLower = lower + 1;
+        indices.push(upper, nextUpper, lower, nextUpper, nextLower, lower);
+      }
+    }
+  });
+
+  const undersideStart = positions.length / 3;
+  const undersideColor = new THREE.Color('#493b34');
+  [
+    [-halfWidth, TERRAIN_CLIFF_BOTTOM_Y, -halfDepth],
+    [halfWidth, TERRAIN_CLIFF_BOTTOM_Y, -halfDepth],
+    [halfWidth, TERRAIN_CLIFF_BOTTOM_Y, halfDepth],
+    [-halfWidth, TERRAIN_CLIFF_BOTTOM_Y, halfDepth],
+  ].forEach((point) => {
+    positions.push(...point);
+    colors.push(undersideColor.r, undersideColor.g, undersideColor.b);
+  });
+  indices.push(
+    undersideStart, undersideStart + 2, undersideStart + 1,
+    undersideStart, undersideStart + 3, undersideStart + 2,
+  );
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(indices);
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 function createTrailGeometry(centerAt, startZ, endZ, width = 1.12) {
   const segments = 160;
   const widthSegments = 8;
-  const reverseWinding = centerAt(endZ) > centerAt(startZ);
+  const reverseWinding = endZ < startZ;
   const positions = [];
   const uvs = [];
   const indices = [];
@@ -394,6 +529,23 @@ function createBranchTrailGeometry() {
 
 function createStationTrailGeometry() {
   return createTrailGeometry(stationTrailCenterX, -12.4, -15.8, 1.34);
+}
+
+function createTrainTrailGeometry() {
+  return createTrailGeometry(trainTrailCenterX, TRAIN_TRACK_START_Z, TRAIN_TRACK_END_Z, 1.1);
+}
+
+function createRailGeometry(offset) {
+  const railStartZ = TRAIN_TRACK_START_Z;
+  const railEndZ = TRAIN_TRACK_END_Z;
+  const segments = (TRAIN_TRACK_SEGMENT_COUNT - 1) * 8;
+  const points = Array.from({ length: segments + 1 }, (_, index) => {
+    const z = THREE.MathUtils.lerp(railStartZ, railEndZ, index / segments);
+    const x = TRAIN_TRACK_X + offset;
+    return new THREE.Vector3(x, terrainHeight(x, z) + 0.195, z);
+  });
+  const curve = new THREE.CatmullRomCurve3(points);
+  return new THREE.TubeGeometry(curve, segments, 0.055, 8, false);
 }
 
 function createCabinTrailGeometry() {
@@ -530,6 +682,73 @@ function SkyDome() {
   );
 }
 
+function StreamDucks({ reducedMotion }) {
+  const ducks = useRef([]);
+  const travelRange = 28 - STREAM_DUCK_SPACING * (STREAM_DUCK_COUNT - 1);
+  const materials = useMemo(() => ({
+    body: new THREE.MeshStandardMaterial({ color: '#f0ce62', roughness: 0.72, flatShading: true }),
+    wing: new THREE.MeshStandardMaterial({ color: '#dcae49', roughness: 0.8, flatShading: true }),
+    bill: new THREE.MeshStandardMaterial({ color: '#d47d37', roughness: 0.76, flatShading: true }),
+    eye: new THREE.MeshBasicMaterial({ color: '#332b24' }),
+  }), []);
+
+  useFrame(({ clock }) => {
+    const time = clock.elapsedTime;
+    ducks.current.forEach((duck, index) => {
+      if (!duck) return;
+      const phase = index * 2.2;
+      const x = reducedMotion
+        ? 2.4 - index * STREAM_DUCK_SPACING
+        : -14 + ((time * 0.48) % travelRange) - index * STREAM_DUCK_SPACING;
+      const centerZ = streamCenterZ(x);
+      const drift = reducedMotion ? 0 : Math.sin(time * 0.38 + phase) * 0.07;
+      duck.position.set(
+        x,
+        terrainHeight(x, centerZ) + 0.16 + (reducedMotion ? 0 : Math.sin(time * 1.8 + phase) * 0.022),
+        centerZ + drift,
+      );
+      duck.rotation.y = -Math.PI / 2 + (reducedMotion ? 0 : Math.sin(time * 0.32 + phase) * 0.045);
+      duck.rotation.z = reducedMotion ? 0 : Math.sin(time * 1.5 + phase) * 0.018;
+    });
+  });
+
+  useEffect(() => () => {
+    Object.values(materials).forEach((material) => material.dispose());
+  }, [materials]);
+
+  return (
+    <group>
+      {Array.from({ length: STREAM_DUCK_COUNT }, (_, index) => (
+        <group
+          key={index}
+          ref={(duck) => { ducks.current[index] = duck; }}
+          scale={index === 0 ? 1 : 0.68}
+        >
+          <mesh scale={[0.8, 0.55, 1.15]} material={materials.body} castShadow>
+            <sphereGeometry args={[0.25, 8, 6]} />
+          </mesh>
+          <mesh position={[0, 0.1, -0.22]} scale={0.58} material={materials.body} castShadow>
+            <sphereGeometry args={[0.2, 8, 6]} />
+          </mesh>
+          <mesh position={[0, 0.11, -0.36]} rotation={[-Math.PI / 2, 0, 0]} material={materials.bill}>
+            <coneGeometry args={[0.065, 0.14, 5]} />
+          </mesh>
+          {[-1, 1].map((side) => (
+            <group key={side}>
+              <mesh position={[side * 0.14, 0.01, 0.015]} scale={[0.28, 0.5, 0.58]} material={materials.wing}>
+                <sphereGeometry args={[0.2, 7, 5]} />
+              </mesh>
+              <mesh position={[side * 0.095, 0.145, -0.285]} material={materials.eye}>
+                <sphereGeometry args={[0.022, 6, 5]} />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      ))}
+    </group>
+  );
+}
+
 function MountainStream({ reducedMotion }) {
   const waterRef = useRef(null);
   const geometry = useMemo(() => createStreamGeometry(), []);
@@ -597,7 +816,12 @@ function MountainStream({ reducedMotion }) {
     material.dispose();
   }, [geometry, material]);
 
-  return <mesh ref={waterRef} geometry={geometry} material={material} renderOrder={1} />;
+  return (
+    <>
+      <mesh ref={waterRef} geometry={geometry} material={material} renderOrder={1} />
+      <StreamDucks reducedMotion={reducedMotion} />
+    </>
+  );
 }
 
 function ScenicBridge() {
@@ -671,23 +895,115 @@ function ScenicBridge() {
         );
       })}
       <group position={[BRIDGE_CENTER_X, destinationY, BRIDGE_DESTINATION_Z]}>
-        <mesh position={[-0.86, 1.05, 0]} material={materials.beams} castShadow>
-          <boxGeometry args={[0.16, 2.1, 0.16]} />
-        </mesh>
-        <mesh position={[0.86, 1.05, 0]} material={materials.beams} castShadow>
-          <boxGeometry args={[0.16, 2.1, 0.16]} />
-        </mesh>
         <pointLight position={[0, 1.6, 0]} color="#9be6e7" intensity={0.75} distance={5} />
       </group>
     </group>
   );
 }
 
-function HorizonMountains() {
+function HorizonMountains({ terrainMaps }) {
+  const horizonGround = useMemo(() => {
+    const widthSegments = 96;
+    const depthSegments = 48;
+    const halfTerrainWidth = TERRAIN_WIDTH / 2;
+    const frontZ = -TERRAIN_DEPTH / 2;
+    const rowSize = widthSegments + 1;
+    const positions = [];
+    const colors = [];
+    const uvs = [];
+    const indices = [];
+    const field = new THREE.Color('#71804b');
+    const fieldLight = new THREE.Color('#929565');
+    const soil = new THREE.Color('#8b3a2b');
+    const drySoil = new THREE.Color('#9c4128');
+    const distantGround = new THREE.Color('#756b5b');
+
+    for (let row = 0; row <= depthSegments; row += 1) {
+      const depthProgress = row / depthSegments;
+      const depthBlend = THREE.MathUtils.smoothstep(depthProgress, 0, 1);
+      const edgeProgress = THREE.MathUtils.smoothstep(depthProgress, 0, 0.3);
+      const widthExpansion = depthBlend * 7;
+      const leftMeadowExpansion = Math.sin(depthProgress * Math.PI) * 10;
+      const leftEdge = -halfTerrainWidth - widthExpansion - leftMeadowExpansion
+        + edgeProgress * (Math.sin(depthProgress * 5.1) * 0.42 + Math.sin(depthProgress * 8.3) * 0.2);
+      const rightEdge = halfTerrainWidth + widthExpansion
+        + edgeProgress * (Math.sin(depthProgress * 4.4 + 0.8) * 0.48 - Math.sin(depthProgress * 7.7) * 0.16);
+      for (let column = 0; column <= widthSegments; column += 1) {
+        const across = column / widthSegments;
+        const x = THREE.MathUtils.lerp(leftEdge, rightEdge, across);
+        const backZ = -47.2
+          + Math.sin(across * Math.PI * 4.4 + 0.3) * 1.1
+          + Math.sin(across * Math.PI * 10.8 + 1.4) * 0.32;
+        const z = THREE.MathUtils.lerp(frontZ, backZ, depthProgress);
+        const clampedX = THREE.MathUtils.clamp(x, -TERRAIN_WIDTH / 2, TERRAIN_WIDTH / 2);
+        const outsideDistance = Math.max(0, Math.abs(x) - TERRAIN_WIDTH / 2);
+        const edgeHeight = terrainHeight(clampedX, frontZ)
+          - 0.55 * THREE.MathUtils.smoothstep(outsideDistance, 0, 10);
+        const rolling = (
+          Math.sin(x * 0.34 + depthProgress * 2.7) * 0.2
+          + Math.cos(x * 0.58 - depthProgress * 3.1) * 0.13
+        ) * Math.sin(depthProgress * Math.PI);
+        const y = THREE.MathUtils.lerp(edgeHeight, -1.85, depthBlend) + rolling;
+        const variation = (
+          Math.sin(x * 0.78 + Math.sin(z * 0.33) * 2.1)
+            * Math.cos(z * 0.62 + Math.sin(x * 0.41) * 1.4) * 0.72
+          + Math.sin(x * 2.8 + z * 1.9) * Math.cos(z * 2.4 - x * 0.7) * 0.34
+          + Math.sin(x * 8.7 + z * 6.3) * 0.12
+        ) * 0.52;
+        const groundColor = variation > 0
+          ? field.clone().lerp(fieldLight, variation * 0.3)
+          : field.clone().lerp(new THREE.Color('#526744'), -variation * 0.22);
+        const distanceFromPath = Math.abs(x - pathCenter(z));
+        const edgeBreakup = Math.sin(z * 2.1 + x * 1.3 + Math.sin(x * 0.8) * 0.8) * 0.14
+          + Math.sin(z * 5.7 - x * 1.9) * 0.055;
+        const pathBlend = 1 - THREE.MathUtils.smoothstep(
+          distanceFromPath,
+          0.78 + edgeBreakup,
+          1.65 + edgeBreakup,
+        );
+        const pathColor = soil.clone().lerp(drySoil, (variation + 1) * 0.16);
+        const color = groundColor
+          .lerp(pathColor, pathBlend)
+          .lerp(
+            distantGround,
+            depthBlend * 0.76 * (1 - THREE.MathUtils.smoothstep(outsideDistance, 0, 2) * 0.85),
+          );
+        positions.push(x, y, z);
+        colors.push(color.r, color.g, color.b);
+        uvs.push((x + TERRAIN_WIDTH / 2) / TERRAIN_WIDTH, (z + TERRAIN_DEPTH / 2) / TERRAIN_DEPTH);
+
+        if (row < depthSegments && column < widthSegments) {
+          const index = row * rowSize + column;
+          const nextRow = index + rowSize;
+          indices.push(index, index + 1, nextRow, index + 1, nextRow + 1, nextRow);
+        }
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setIndex(indices);
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.computeVertexNormals();
+    return geometry;
+  }, []);
+  const horizonGroundMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    vertexColors: true,
+    roughness: 0.97,
+    metalness: 0,
+    map: terrainMaps.colorMap,
+    normalMap: terrainMaps.normalMap,
+    normalScale: new THREE.Vector2(0.3, 0.3),
+    roughnessMap: terrainMaps.roughnessMap,
+    bumpMap: terrainMaps.bumpMap,
+    bumpScale: 0.02,
+  }), [terrainMaps]);
   const mountainRanges = useMemo(() => {
     const ranges = [
       {
-        z: -39.5,
+        z: -43.8,
         depth: 5.8,
         color: new THREE.Color('#778da7'),
         peaks: [
@@ -759,14 +1075,17 @@ function HorizonMountains() {
   }, []);
 
   useEffect(() => () => {
+    horizonGround.dispose();
+    horizonGroundMaterial.dispose();
     mountainRanges.forEach(({ geometry, material }) => {
       geometry.dispose();
       material.dispose();
     });
-  }, [mountainRanges]);
+  }, [horizonGround, horizonGroundMaterial, mountainRanges]);
 
   return (
     <group>
+      <mesh geometry={horizonGround} material={horizonGroundMaterial} receiveShadow />
       {mountainRanges.map(({ geometry, material }, index) => (
         <mesh
           key={`horizon-range-${index}`}
@@ -854,24 +1173,45 @@ function createBarkMaps() {
   return { colorMap, normalMap, roughnessMap };
 }
 
-function addWindToMaterial(material, amplitude, perInstanceWind = false) {
+function addWindToMaterial(material, amplitude, perInstanceWind = false, interactionPart = null) {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uWindTime = { value: 0 };
+    if (interactionPart) shader.uniforms.uPlayerPosition = { value: new THREE.Vector2(0, 0) };
     const windAttribute = perInstanceWind ? '\nattribute float instanceWind;' : '';
     const instanceStrength = perInstanceWind ? ' * instanceWind' : '';
+    const interactionUniform = interactionPart ? '\nuniform vec2 uPlayerPosition;' : '';
+    const interactionDisplacement = interactionPart
+      ? `
+      vec2 playerDelta = instanceMatrix[3].xz - uPlayerPosition;
+      float playerDistance = length(playerDelta);
+      float proximity = 1.0 - smoothstep(0.0, 1.2, playerDistance);
+      float easedProximity = proximity * proximity * (3.0 - 2.0 * proximity);
+      vec2 awayFromPlayer = playerDelta / max(playerDistance, 0.0001);
+      mat2 instanceBasis = mat2(instanceMatrix[0].xz, instanceMatrix[2].xz);
+      vec2 localDisplacement = inverse(instanceBasis) * awayFromPlayer;
+      float exposedVertex = ${interactionPart === 'grass'
+        ? 'smoothstep(0.05, 0.72, position.y)'
+        : interactionPart === 'stem'
+          ? 'smoothstep(-0.5, 0.5, position.y)'
+          : interactionPart === 'petal'
+            ? '0.45 + 0.55 * clamp(position.y, 0.0, 1.0)'
+            : '1.0'};
+      transformed.xz += localDisplacement * 0.22 * easedProximity * exposedVertex;`
+      : '';
     shader.vertexShader = shader.vertexShader.replace(
       '#include <common>',
-      `#include <common>\nuniform float uWindTime;${windAttribute}`,
+      `#include <common>\nuniform float uWindTime;${interactionUniform}${windAttribute}`,
     );
     shader.vertexShader = shader.vertexShader.replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
+      ${interactionDisplacement}
       float windPhase = uWindTime * 1.15 + instanceMatrix[3].x * 0.61 + instanceMatrix[3].z * 0.47;
       transformed.x += sin(windPhase + position.y * 2.6) * position.y * ${amplitude.toFixed(4)}${instanceStrength};`,
     );
     material.userData.windShader = shader;
   };
-  material.customProgramCacheKey = () => `meadow-wind-${amplitude}-${perInstanceWind}`;
+  material.customProgramCacheKey = () => `meadow-wind-${amplitude}-${perInstanceWind}-${interactionPart}`;
 }
 
 function createGrassGeometry() {
@@ -909,7 +1249,7 @@ function createGrassGeometry() {
   return geometry;
 }
 
-function MeadowGrass({ reducedMotion }) {
+function MeadowGrass({ reducedMotion, walkerPosition }) {
   const grassRef = useRef(null);
   const grassCount = useMemo(
     () => (window.matchMedia('(pointer: coarse)').matches ? 13000 : GRASS_TUFT_COUNT),
@@ -925,7 +1265,7 @@ function MeadowGrass({ reducedMotion }) {
       color: '#ffffff',
       side: THREE.DoubleSide,
     });
-    addWindToMaterial(material, 0.22, true);
+    addWindToMaterial(material, 0.22, true, 'grass');
     return material;
   }, []);
   const grass = useMemo(() => {
@@ -935,15 +1275,22 @@ function MeadowGrass({ reducedMotion }) {
     let attempts = 0;
     while (blades.length < targetCount && attempts < targetCount * 4) {
       attempts += 1;
-      const x = -16.4 + nextRandom() * 32.8;
+      const x = -15.6 + nextRandom() * 31.2;
       const z = -18.2 + nextRandom() * 36.4;
       const mainPathDistance = Math.abs(x - pathCenter(z));
       const branchActive = z >= -10.5 && z <= 2.7;
       const branchDistance = Math.abs(x - branchTrailCenterX(z));
       const stationTrailActive = z >= -15.8 && z <= -12.4;
       const stationTrailDistance = Math.abs(x - stationTrailCenterX(z));
+      const trainTrailActive = z >= TRAIN_TRACK_END_Z && z <= TRAIN_TRACK_START_Z;
+      const trainTrailDistance = Math.abs(x - trainTrailCenterX(z));
+      const trainTracksActive = z >= TRAIN_TRACK_END_Z && z <= TRAIN_TRACK_START_Z;
+      const trainTrackDistance = Math.abs(x - TRAIN_TRACK_X);
       const cabinTrailActive = z >= CABIN_TRAIL_END_Z - 0.4 && z <= 2.7;
       const cabinTrailDistance = Math.abs(x - cabinTrailCenterX(z));
+      const insideCabin = Math.abs(x - CABIN_X) < 1.9
+        && z > CABIN_BACK_Z
+        && z < CABIN_FRONT_Z;
       const mountainTrailActive = z >= -23.8 && z <= MOUNTAIN_TRAIL_START_Z + 0.4;
       const mountainTrailDistance = Math.abs(x - mountainTrailCenterX(z));
       const mountainLift = mountainLiftAt(x, z);
@@ -951,7 +1298,10 @@ function MeadowGrass({ reducedMotion }) {
         mainPathDistance < 1.72
         || (branchActive && branchDistance < 1.34)
         || (stationTrailActive && stationTrailDistance < 1.62)
+        || (trainTrailActive && trainTrailDistance < 1.5)
+        || (trainTracksActive && trainTrackDistance < 1.2)
         || (cabinTrailActive && cabinTrailDistance < 1.34)
+        || insideCabin
         || (mountainTrailActive && mountainTrailDistance < 1.26)
         || mountainLift > 1.15
       ) continue;
@@ -993,9 +1343,13 @@ function MeadowGrass({ reducedMotion }) {
   }, [grass, grassGeometry, scratch, windValues]);
 
   useFrame(({ clock }) => {
-    if (!reducedMotion && grassRef.current?.material.userData.windShader) {
-      grassRef.current.material.userData.windShader.uniforms.uWindTime.value = clock.elapsedTime;
-    }
+    if (!grassRef.current?.material.userData.windShader) return;
+    grassRef.current.material.userData.windShader.uniforms.uPlayerPosition.value.set(
+      walkerPosition.current.x,
+      walkerPosition.current.z - 1,
+    );
+    if (reducedMotion) return;
+    grassRef.current.material.userData.windShader.uniforms.uWindTime.value = clock.elapsedTime;
   });
 
   useEffect(() => () => {
@@ -1126,6 +1480,8 @@ function Forest() {
       if (branchActive && Math.abs(x - branchTrailCenterX(z)) < 3.2) continue;
       const stationTrailActive = z >= -15.8 && z <= -12.4;
       if (stationTrailActive && Math.abs(x - stationTrailCenterX(z)) < 3.5) continue;
+      const trainTrailActive = z >= TRAIN_TRACK_END_Z && z <= TRAIN_TRACK_START_Z;
+      if (trainTrailActive && Math.abs(x - trainTrailCenterX(z)) < 3.2) continue;
       if (Math.hypot(x - READER_POSITION.x, z - (READER_POSITION.z - 1)) < 9.5) continue;
       if (mountainLiftAt(x, z) > 1.4) continue;
       if (Math.hypot(x - CABIN_X, z - CABIN_LOCAL_Z) < 6.6) continue;
@@ -1160,7 +1516,7 @@ function Forest() {
 
     for (let index = 0; index < 28; index += 1) {
       const z = -21.3 + (index % 2) * 1.1 + (nextRandom() - 0.5) * 0.45;
-      const x = -15.2 + index * 1.12 + (nextRandom() - 0.5) * 0.7;
+      const x = -13.6 + index * 1 + (nextRandom() - 0.5) * 0.54;
       const mountainTrailActive = z >= -23.8 && z <= MOUNTAIN_TRAIL_START_Z + 0.4;
       if (mountainLiftAt(x, z) > 1.4) continue;
       if (mountainTrailActive && Math.abs(x - mountainTrailCenterX(z)) < 2.8) continue;
@@ -1364,7 +1720,7 @@ function Forest() {
   ));
 }
 
-function Wildflowers({ reducedMotion }) {
+function Wildflowers({ reducedMotion, walkerPosition }) {
   const petalRef = useRef(null);
   const centerRef = useRef(null);
   const stemRef = useRef(null);
@@ -1397,7 +1753,7 @@ function Wildflowers({ reducedMotion }) {
         const side = nextRandom() < 0.5 ? -1 : 1;
         x = stationTrailCenterX(z) + side * (1.24 + nextRandom() * 0.7);
       } else {
-        x = -16 + nextRandom() * 32;
+        x = -15.3 + nextRandom() * 30.6;
         z = -18 + nextRandom() * 36;
       }
       const mainDistance = Math.abs(x - pathCenter(z));
@@ -1407,12 +1763,14 @@ function Wildflowers({ reducedMotion }) {
       const mountainLift = mountainLiftAt(x, z);
       const branchActive = z >= -10.5 && z <= 2.7;
       const stationTrailActive = z >= -15.8 && z <= -12.4;
+      const trainTrailActive = z >= TRAIN_TRACK_END_Z && z <= TRAIN_TRACK_START_Z;
       const cabinTrailActive = z >= CABIN_TRAIL_END_Z - 0.4 && z <= 2.7;
       const mountainTrailActive = z >= -23.8 && z <= MOUNTAIN_TRAIL_START_Z + 0.4;
       if (
         mainDistance < 1.2
         || (branchActive && branchDistance < 1.2)
         || (stationTrailActive && Math.abs(x - stationTrailCenterX(z)) < 1.55)
+        || (trainTrailActive && Math.abs(x - trainTrailCenterX(z)) < 1.45)
         || (cabinTrailActive && cabinDistance < 1.2)
         || (mountainTrailActive && mountainTrailDistance < 1.2)
         || mountainLift > 1.2
@@ -1435,17 +1793,17 @@ function Wildflowers({ reducedMotion }) {
   const stemGeometry = useMemo(() => new THREE.CylinderGeometry(0.012, 0.02, 1, 5), []);
   const petalMaterial = useMemo(() => {
     const material = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.86 });
-    addWindToMaterial(material, 0.14);
+    addWindToMaterial(material, 0.14, false, 'petal');
     return material;
   }, []);
   const centerMaterial = useMemo(() => {
     const material = new THREE.MeshStandardMaterial({ color: '#f4c84e', roughness: 0.78 });
-    addWindToMaterial(material, 0.14);
+    addWindToMaterial(material, 0.14, false, 'center');
     return material;
   }, []);
   const stemMaterial = useMemo(() => {
     const material = new THREE.MeshStandardMaterial({ color: '#71824f', roughness: 0.96 });
-    addWindToMaterial(material, 0.14);
+    addWindToMaterial(material, 0.14, false, 'stem');
     return material;
   }, []);
   const scratch = useMemo(() => ({
@@ -1489,11 +1847,14 @@ function Wildflowers({ reducedMotion }) {
   }, [flowers, scratch]);
 
   useFrame(({ clock }) => {
-    if (reducedMotion) return;
+    const playerX = walkerPosition.current.x;
+    const playerZ = walkerPosition.current.z - 1;
     [petalRef.current, centerRef.current, stemRef.current].forEach((mesh) => {
-      if (mesh?.material.userData.windShader) {
-        mesh.material.userData.windShader.uniforms.uWindTime.value = clock.elapsedTime;
-      }
+      const shader = mesh?.material.userData.windShader;
+      if (!shader) return;
+      shader.uniforms.uPlayerPosition.value.set(playerX, playerZ);
+      if (reducedMotion) return;
+      shader.uniforms.uWindTime.value = clock.elapsedTime;
     });
   });
 
@@ -1818,7 +2179,7 @@ function MountainRocks() {
   ], []);
   const formations = useMemo(() => [
     { x: 5.7, z: -25.2, scale: [1.05, 1.35, 1.05], rotation: [0.08, 0.4, -0.12], material: 0 },
-    { x: 15.2, z: -21.8, scale: [1.25, 1.65, 1.15], rotation: [-0.1, -0.6, 0.16], material: 2 },
+    { x: 14.2, z: -21.8, scale: [1.25, 1.65, 1.15], rotation: [-0.1, -0.6, 0.16], material: 2 },
     { x: 13.5, z: -25.8, scale: [1.25, 1.45, 1.1], rotation: [0.15, 0.8, 0.08], material: 1 },
     { x: 6.6, z: -27.1, scale: [0.95, 1.2, 0.9], rotation: [-0.08, -0.2, -0.14], material: 2 },
   ], []);
@@ -1847,6 +2208,9 @@ function LogCabin({
   dogActive,
   isInsideCabin,
   onDoorOpen,
+  computerReady,
+  onComputerSeat,
+  onComputerInitialize,
 }) {
   const cabinX = CABIN_X;
   const cabinZ = CABIN_LOCAL_Z;
@@ -1872,6 +2236,7 @@ function LogCabin({
     opacity: 0.2,
     depthWrite: false,
   })), []);
+  const computerScreenTexture = useMemo(() => createComputerScreenTexture(), []);
   const porchMaterials = useMemo(() => ({
     wood: new THREE.MeshStandardMaterial({ color: '#795337', roughness: 0.93, flatShading: true }),
     woodLight: new THREE.MeshStandardMaterial({ color: '#a77a4f', roughness: 0.9 }),
@@ -1885,6 +2250,15 @@ function LogCabin({
     telescopeMetal: new THREE.MeshStandardMaterial({ color: '#343b43', metalness: 0.22, roughness: 0.66 }),
     telescopeBody: new THREE.MeshStandardMaterial({ color: '#343d45', metalness: 0.12, roughness: 0.78 }),
     telescopeRubber: new THREE.MeshStandardMaterial({ color: '#171c21', roughness: 0.92 }),
+    computerFrame: new THREE.MeshStandardMaterial({ color: '#273438', metalness: 0.28, roughness: 0.56 }),
+    computerScreen: new THREE.MeshStandardMaterial({
+      color: '#a8fff3',
+      map: computerScreenTexture,
+      emissive: '#35cfc5',
+      emissiveMap: computerScreenTexture,
+      emissiveIntensity: 0.62,
+      roughness: 0.38,
+    }),
     telescopeLens: new THREE.MeshStandardMaterial({
       color: '#365e70',
       emissive: '#173444',
@@ -1898,7 +2272,7 @@ function LogCabin({
     butterflyWings: ['#9b6551', '#6f7f66', '#bb9461', '#647f8b', '#a16b74', '#657253'].map(
       (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, flatShading: true }),
     ),
-  }), []);
+  }), [computerScreenTexture]);
   const vineCurves = useMemo(() => [-1.62, 1.65].map((x, index) => {
     const points = Array.from({ length: 7 }, (_, point) => new THREE.Vector3(
       x + Math.sin(point * 1.3 + index) * 0.13,
@@ -1953,7 +2327,6 @@ function LogCabin({
   const door = useRef(null);
   const dog = useRef(null);
   const dogHead = useRef(null);
-  const dogTail = useRef(null);
   const dogLegs = useRef([]);
   const chimneySmoke = useRef([]);
   const [doorManuallyOpen, setDoorManuallyOpen] = useState(false);
@@ -2052,7 +2425,6 @@ function LogCabin({
           leg.rotation.x = Math.sin(phase) * 0.34;
         }
       });
-      if (dogTail.current) dogTail.current.rotation.x = Math.sin(time * 9) * 0.52;
       if (dogHead.current) {
         dogHead.current.rotation.x = Math.sin(stride * 4) * 0.045;
         dogHead.current.rotation.z = Math.sin(stride * 2.2) * 0.035;
@@ -2072,9 +2444,10 @@ function LogCabin({
       if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
       else material.dispose();
     });
+    computerScreenTexture.dispose();
     vineGeometries.forEach((geometry) => geometry.dispose());
     decorLeafGeometry.dispose();
-  }, [beetleMaterials, decorLeafGeometry, darkWoodMaterial, dogMaterials, logGeometry, porchMaterials, roofMaterial, smokeMaterials, vineGeometries, woodMaterial]);
+  }, [beetleMaterials, computerScreenTexture, decorLeafGeometry, darkWoodMaterial, dogMaterials, logGeometry, porchMaterials, roofMaterial, smokeMaterials, vineGeometries, woodMaterial]);
 
   return (
     <group>
@@ -2134,6 +2507,71 @@ function LogCabin({
             <mesh position={[0, 0.82, 0]} material={porchMaterials.brass}>
               <sphereGeometry args={[0.045, 8, 6]} />
             </mesh>
+            <group position={[0, 0, -0.18]}>
+              <mesh position={[0, 1.13, 0]} material={porchMaterials.computerFrame} castShadow receiveShadow>
+                <boxGeometry args={[0.62, 0.46, 0.055]} />
+              </mesh>
+              <mesh
+                position={[0, 1.13, 0.03]}
+                material={porchMaterials.computerScreen}
+                onPointerOver={(event) => {
+                  if (!isInsideCabin) return;
+                  event.stopPropagation();
+                  event.nativeEvent.target.style.cursor = 'pointer';
+                }}
+                onPointerOut={(event) => {
+                  event.nativeEvent.target.style.cursor = '';
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (!isInsideCabin) return;
+                  if (computerReady) onComputerInitialize?.();
+                  else onComputerSeat?.();
+                }}
+              >
+                <planeGeometry args={[0.55, 0.39]} />
+              </mesh>
+              <mesh position={[0, 0.83, -0.01]} material={porchMaterials.computerFrame} castShadow>
+                <boxGeometry args={[0.09, 0.56, 0.08]} />
+              </mesh>
+              <mesh position={[0, 0.585, 0.015]} material={porchMaterials.computerFrame} castShadow>
+                <boxGeometry args={[0.27, 0.035, 0.19]} />
+              </mesh>
+              <pointLight position={[0, 1.16, 0.26]} color="#62e8dd" intensity={0.28} distance={1.8} />
+            </group>
+            <mesh position={[-0.06, 0.585, 0.1]} material={porchMaterials.computerFrame}>
+              <boxGeometry args={[0.34, 0.025, 0.12]} />
+            </mesh>
+          </group>
+          <group position={[0.98, 0, 0.37]}>
+            <mesh
+              position={[0, 0.49, 0]}
+              material={porchMaterials.woodLight}
+              castShadow
+              receiveShadow
+              onPointerOver={(event) => {
+                if (!isInsideCabin) return;
+                event.stopPropagation();
+                event.nativeEvent.target.style.cursor = 'pointer';
+              }}
+              onPointerOut={(event) => {
+                event.nativeEvent.target.style.cursor = '';
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (isInsideCabin) onComputerSeat?.();
+              }}
+            >
+              <boxGeometry args={[0.48, 0.11, 0.46]} />
+            </mesh>
+            <mesh position={[0, 0.76, 0.18]} material={porchMaterials.wood} castShadow receiveShadow>
+              <boxGeometry args={[0.48, 0.48, 0.09]} />
+            </mesh>
+            {[-0.17, 0.17].map((x) => [-0.16, 0.16].map((z) => (
+              <mesh key={`${x}-${z}`} position={[x, 0.23, z]} material={porchMaterials.wood} castShadow>
+                <cylinderGeometry args={[0.027, 0.035, 0.46, 8]} />
+              </mesh>
+            )))}
           </group>
           <mesh position={[-0.95, 0.36, -0.7]} rotation={[0, 0, 0.04]} material={porchMaterials.bookGreen} castShadow>
             <boxGeometry args={[0.52, 0.08, 0.72]} />
@@ -2460,11 +2898,6 @@ function LogCabin({
             </group>
           ))}
         </group>
-        <group ref={dogTail} position={[0, 0.58, -0.48]}>
-          <mesh rotation={[0.45, 0, 0]} material={dogMaterials.coat} castShadow>
-            <capsuleGeometry args={[0.055, 0.34, 4, 7]} />
-          </mesh>
-        </group>
         {[
           [-0.19, -0.2],
           [0.19, -0.2],
@@ -2540,15 +2973,21 @@ function CabinGrove() {
     { x: -3.35, z: -2.35, height: 2.4, crown: '#55744b' },
     { x: 3.65, z: -2.7, height: 2.8, crown: '#718653' },
     { x: -6.2, z: 1.35, height: 2.15, crown: '#647a4c' },
-    { x: 6.2, z: 1.5, height: 2.55, crown: '#87935a' },
+    { x: 4, z: 1.5, height: 2.55, crown: '#87935a' },
     { x: -6.5, z: 4.05, height: 2.35, crown: '#738650' },
     { x: 2.9, z: -4.15, height: 2.2, crown: '#586f49' },
   ], []);
   const trunkGeometry = useMemo(() => new THREE.CylinderGeometry(0.1, 0.18, 1, 7), []);
+  const rootGeometry = useMemo(() => new THREE.DodecahedronGeometry(1, 0), []);
   const crownGeometry = useMemo(() => new THREE.IcosahedronGeometry(1, 1), []);
   const trunkMaterial = useMemo(() => new THREE.MeshStandardMaterial({
     color: '#765039',
     roughness: 0.96,
+    flatShading: true,
+  }), []);
+  const rootMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#574434',
+    roughness: 0.98,
     flatShading: true,
   }), []);
   const crownMaterials = useMemo(() => trees.map((tree) => new THREE.MeshStandardMaterial({
@@ -2559,19 +2998,29 @@ function CabinGrove() {
 
   useEffect(() => () => {
     trunkGeometry.dispose();
+    rootGeometry.dispose();
     crownGeometry.dispose();
     trunkMaterial.dispose();
+    rootMaterial.dispose();
     crownMaterials.forEach((material) => material.dispose());
-  }, [crownGeometry, crownMaterials, trunkGeometry, trunkMaterial]);
+  }, [crownGeometry, crownMaterials, rootGeometry, rootMaterial, trunkGeometry, trunkMaterial]);
 
   return (
     <group>
       {trees.map((tree, index) => {
         const x = 11.1 + tree.x;
         const z = -8.4 + tree.z;
-        const y = terrainHeight(x, z);
+        const y = terrainHeight(x, z) - 0.08;
         return (
           <group key={index} position={[x, y, z]}>
+            <mesh
+              geometry={rootGeometry}
+              material={rootMaterial}
+              position={[0, 0.09, 0]}
+              scale={[0.34, 0.08, 0.32]}
+              castShadow
+              receiveShadow
+            />
             <mesh
               geometry={trunkGeometry}
               material={trunkMaterial}
@@ -2660,22 +3109,35 @@ function ForestTurtle({ reducedMotion }) {
 function ForestReader({ greeting, reducedMotion }) {
   const head = useRef(null);
   const book = useRef(null);
+  const leftElbow = useRef(null);
+  const rightElbow = useRef(null);
+  const skinMaps = useMemo(() => createSkinMaps(), []);
+  const skinMaterial = useMemo(() => createSkinMaterial(skinMaps, '#f2dfd2'), [skinMaps]);
+  const skinCreaseMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#a87568',
+    roughness: 0.94,
+  }), []);
   const readerMaterials = useMemo(() => ({
-    coat: new THREE.MeshStandardMaterial({ color: '#536b5f', roughness: 0.9, flatShading: true }),
+    coat: new THREE.MeshStandardMaterial({ color: '#c4bca9', roughness: 0.92, flatShading: true }),
+    vest: new THREE.MeshStandardMaterial({ color: '#535b48', roughness: 0.9, flatShading: true }),
+    vestTrim: new THREE.MeshStandardMaterial({ color: '#778069', roughness: 0.88, flatShading: true }),
     trousers: new THREE.MeshStandardMaterial({ color: '#57493b', roughness: 0.92, flatShading: true }),
-    skin: new THREE.MeshStandardMaterial({ color: '#d8a98c', roughness: 0.82 }),
+    eyes: new THREE.MeshStandardMaterial({ color: '#382723', roughness: 0.55 }),
+    skin: skinMaterial,
+    skinCrease: skinCreaseMaterial,
     hair: new THREE.MeshStandardMaterial({ color: '#44352e', roughness: 0.94, flatShading: true }),
     wood: new THREE.MeshStandardMaterial({ color: '#78573d', roughness: 0.96, flatShading: true }),
-    hat: new THREE.MeshStandardMaterial({ color: '#9a7045', roughness: 0.94, flatShading: true }),
+    hat: new THREE.MeshStandardMaterial({ color: '#ad8955', roughness: 0.94, flatShading: true }),
+    hatBand: new THREE.MeshStandardMaterial({ color: '#634a33', roughness: 0.84, flatShading: true }),
     bag: new THREE.MeshStandardMaterial({ color: '#9b6845', roughness: 0.96, flatShading: true }),
-    shoes: new THREE.MeshStandardMaterial({ color: '#334f6b', roughness: 0.88, flatShading: true }),
+    shoes: new THREE.MeshStandardMaterial({ color: '#654936', roughness: 0.9, flatShading: true }),
     shoeMidsole: new THREE.MeshStandardMaterial({ color: '#e8e2d7', roughness: 0.9 }),
     shoeOutsole: new THREE.MeshStandardMaterial({ color: '#3d454b', roughness: 0.96, flatShading: true }),
     shoeLaces: new THREE.MeshStandardMaterial({ color: '#f4f0e7', roughness: 0.82 }),
     shoeAccent: new THREE.MeshStandardMaterial({ color: '#e39a62', roughness: 0.86 }),
     book: new THREE.MeshStandardMaterial({ color: '#6f4935', roughness: 0.84 }),
     pages: new THREE.MeshStandardMaterial({ color: '#e8dcc0', roughness: 0.92 }),
-  }), []);
+  }), [skinCreaseMaterial, skinMaterial]);
   const y = terrainHeight(READER_POSITION.x, READER_LOCAL_Z);
 
   useFrame((_, delta) => {
@@ -2702,11 +3164,23 @@ function ForestReader({ greeting, reducedMotion }) {
         delta,
       );
     }
+    [leftElbow.current, rightElbow.current].forEach((elbow) => {
+      if (!elbow) return;
+      elbow.rotation.x = THREE.MathUtils.damp(
+        elbow.rotation.x,
+        greeting ? 0.12 : 0.04,
+        2.4,
+        delta,
+      );
+    });
   });
 
   useEffect(() => () => {
     Object.values(readerMaterials).forEach((material) => material.dispose());
-  }, [readerMaterials]);
+    skinMaps.colorMap.dispose();
+    skinMaps.normalMap.dispose();
+    skinMaps.roughnessMap.dispose();
+  }, [readerMaterials, skinMaps]);
 
   return (
     <group position={[READER_POSITION.x, y, READER_POSITION.z]} rotation={[0, Math.PI / 2, 0]}>
@@ -2759,18 +3233,46 @@ function ForestReader({ greeting, reducedMotion }) {
         <mesh position={[0, 0.76, 0.1]} rotation={[0.08, 0, 0]} material={readerMaterials.coat} castShadow receiveShadow>
           <capsuleGeometry args={[0.27, 0.47, 5, 9]} />
         </mesh>
+        <group position={[0, 0.76, -0.16]}>
+          <mesh scale={[1, 1, 0.18]} material={readerMaterials.vest} castShadow receiveShadow>
+            <capsuleGeometry args={[0.235, 0.39, 5, 9]} />
+          </mesh>
+          {[-1, 1].map((side) => (
+            <mesh key={`vest-pocket-${side}`} position={[side * 0.12, 0.14, -0.044]} material={readerMaterials.vestTrim}>
+              <boxGeometry args={[0.1, 0.1, 0.018]} />
+            </mesh>
+          ))}
+          {[-0.1, 0.02, 0.14, 0.26].map((yOffset) => (
+            <mesh key={`vest-button-${yOffset}`} position={[0, yOffset, -0.044]} material={readerMaterials.shoeAccent}>
+              <sphereGeometry args={[0.018, 8, 6]} />
+            </mesh>
+          ))}
+        </group>
         <group ref={head} position={[0, 1.31, -0.01]}>
           <mesh scale={[0.23, 0.26, 0.22]} material={readerMaterials.skin} castShadow>
             <sphereGeometry args={[1, 12, 9]} />
           </mesh>
+          {[-1, 1].map((side) => (
+            <mesh
+              key={`reader-eye-${side}`}
+              position={[side * 0.07, 0.035, -0.235]}
+              scale={[0.022, 0.026, 0.01]}
+              material={readerMaterials.eyes}
+            >
+              <sphereGeometry args={[1, 10, 8]} />
+            </mesh>
+          ))}
           <mesh position={[0, 0.13, 0.045]} scale={[1.04, 0.68, 0.92]} material={readerMaterials.hair} castShadow>
             <sphereGeometry args={[0.23, 11, 8]} />
           </mesh>
           <mesh position={[0, 0.23, 0]} material={readerMaterials.hat} castShadow>
-            <cylinderGeometry args={[0.32, 0.3, 0.055, 12]} />
+            <cylinderGeometry args={[0.44, 0.46, 0.055, 20]} />
           </mesh>
           <mesh position={[0, 0.34, 0.015]} material={readerMaterials.hat} castShadow>
-            <cylinderGeometry args={[0.2, 0.23, 0.19, 10]} />
+            <cylinderGeometry args={[0.2, 0.23, 0.19, 16]} />
+          </mesh>
+          <mesh position={[0, 0.31, 0.015]} rotation={[Math.PI / 2, 0, 0]} material={readerMaterials.hatBand}>
+            <torusGeometry args={[0.216, 0.018, 6, 24]} />
           </mesh>
         </group>
         <group ref={book} position={[0, 0.73, -0.3]} rotation={[0.24, 0, 0]}>
@@ -2787,16 +3289,35 @@ function ForestReader({ greeting, reducedMotion }) {
           </mesh>
         </group>
         {[-1, 1].map((side) => (
-          <group key={side} position={[side * 0.24, 0.98, 0.02]} rotation={[0, 0, side * -0.28]}>
-            <mesh position={[side * -0.025, -0.11, -0.08]} rotation={[0.42, 0, side * 0.1]} material={readerMaterials.coat} castShadow>
-              <capsuleGeometry args={[0.095, 0.34, 4, 7]} />
+          <group key={side} position={[side * 0.27, 0.99, 0.1]} rotation={[0, 0, side * -0.28]}>
+            <mesh position={[side * -0.065, -0.11, -0.04]} rotation={[0.42, 0, side * 0.1]} material={readerMaterials.coat} castShadow receiveShadow>
+              <capsuleGeometry args={[0.105, 0.34, 12, 24]} />
             </mesh>
-            <mesh position={[side * -0.045, -0.25, -0.24]} rotation={[0.58, 0, 0]} material={readerMaterials.coat} castShadow>
-              <capsuleGeometry args={[0.075, 0.18, 4, 7]} />
-            </mesh>
-            <mesh position={[side * -0.045, -0.34, -0.31]} material={readerMaterials.skin} castShadow>
-              <sphereGeometry args={[0.07, 8, 6]} />
-            </mesh>
+            <group
+              ref={side < 0 ? leftElbow : rightElbow}
+              position={[side * -0.085, -0.25, -0.16]}
+            >
+              <mesh scale={[0.083, 0.084, 0.08]} material={readerMaterials.coat} castShadow receiveShadow>
+                <sphereGeometry args={[1, 24, 18]} />
+              </mesh>
+              <mesh rotation={[0.58, 0, 0]} material={readerMaterials.coat} castShadow receiveShadow>
+                <capsuleGeometry args={[0.082, 0.18, 12, 24]} />
+              </mesh>
+              <group
+                position={[side * -0.005, -0.09, -0.07]}
+                rotation={[Math.PI, 0, side * -0.12]}
+              >
+                <mesh position={[0, 0.035, 0]} scale={[0.043, 0.04, 0.042]} material={readerMaterials.skin} castShadow>
+                  <sphereGeometry args={[1, 20, 14]} />
+                </mesh>
+                <Hand
+                  mirror={side}
+                  scale={0.58}
+                  material={readerMaterials.skin}
+                  creaseMaterial={readerMaterials.skinCrease}
+                />
+              </group>
+            </group>
           </group>
         ))}
       </group>
@@ -2833,6 +3354,8 @@ function StationAndTrain({ walkerPosition, reducedMotion }) {
   const train = useRef(null);
   const wheels = useRef([]);
   const steamPuffs = useRef([]);
+  const railGeometries = useMemo(() => TRAIN_RAIL_OFFSETS.map(createRailGeometry), []);
+  const railEndCapGeometry = useMemo(() => new THREE.SphereGeometry(0.055, 8, 6), []);
   const passage = useRef({ active: false, elapsed: 0, hasPassed: false, wasNear: false });
   const materials = useMemo(() => ({
     stationWood: new THREE.MeshStandardMaterial({ color: '#67432e', roughness: 0.94, flatShading: true }),
@@ -2855,7 +3378,8 @@ function StationAndTrain({ walkerPosition, reducedMotion }) {
 
   useFrame((_, delta) => {
     const state = passage.current;
-    const passageDuration = reducedMotion ? 10 : 8;
+    const passageDuration = reducedMotion ? 20 : 16;
+    const legDuration = passageDuration / 2;
     const walker = walkerPosition.current;
     const nearStation = Math.hypot(
       walker.x - TRAIN_STATION_POSITION.x,
@@ -2871,14 +3395,20 @@ function StationAndTrain({ walkerPosition, reducedMotion }) {
     state.wasNear = nearStation;
 
     if (!train.current) return;
+    train.current.visible = state.active;
     if (state.active) {
       state.elapsed = Math.min(state.elapsed + delta, passageDuration);
       if (state.elapsed >= passageDuration) state.active = false;
     }
 
-    const progress = state.elapsed / passageDuration;
-    const easedProgress = progress * progress * (3 - 2 * progress);
-    train.current.position.z = THREE.MathUtils.lerp(TRAIN_START_Z, TRAIN_END_Z, easedProgress);
+    const returning = state.elapsed > legDuration;
+    const legProgress = returning
+      ? (state.elapsed - legDuration) / legDuration
+      : state.elapsed / legDuration;
+    const easedProgress = legProgress * legProgress * (3 - 2 * legProgress);
+    train.current.position.z = returning
+      ? THREE.MathUtils.lerp(TRAIN_END_Z, TRAIN_START_Z, easedProgress)
+      : THREE.MathUtils.lerp(TRAIN_START_Z, TRAIN_END_Z, easedProgress);
     train.current.position.y = terrainHeight(TRAIN_TRACK_X, train.current.position.z) + 0.06;
     const trainIsPassing = state.active
       && Math.hypot(
@@ -2886,7 +3416,10 @@ function StationAndTrain({ walkerPosition, reducedMotion }) {
         walker.z - (train.current.position.z + 1),
       ) <= 4.2;
     setTrainPassing(trainIsPassing);
-    const wheelRotation = state.active ? state.elapsed * 5 : 0;
+    const wheelTravelTime = returning
+      ? legDuration - (state.elapsed - legDuration)
+      : state.elapsed;
+    const wheelRotation = state.active ? wheelTravelTime * 5 : 0;
     wheels.current.forEach((wheel) => {
       if (wheel) wheel.rotation.z = wheelRotation;
     });
@@ -2909,28 +3442,67 @@ function StationAndTrain({ walkerPosition, reducedMotion }) {
       if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
       else material.dispose();
     });
-  }, [materials]);
+    railGeometries.forEach((geometry) => geometry.dispose());
+    railEndCapGeometry.dispose();
+  }, [materials, railEndCapGeometry, railGeometries]);
 
   return (
     <group>
-      {Array.from({ length: 21 }, (_, index) => {
-        const z = -21.5 + index * 0.6;
-        const y = terrainHeight(TRAIN_TRACK_X, z);
+      {Array.from({ length: TRAIN_TRACK_SEGMENT_COUNT }, (_, index) => {
+        const z = TRAIN_TRACK_CENTER_Z
+          + (index - (TRAIN_TRACK_SEGMENT_COUNT - 1) / 2) * TRAIN_TRACK_SEGMENT_SPACING;
+        const leftY = terrainHeight(TRAIN_TRACK_X - 0.95, z);
+        const rightY = terrainHeight(TRAIN_TRACK_X + 0.95, z);
+        const y = (leftY + rightY) / 2;
         return (
-          <mesh key={`station-sleeper-${index}`} position={[TRAIN_TRACK_X, y + 0.07, z]} material={materials.stationWood} receiveShadow>
+          <mesh
+            key={`station-sleeper-${index}`}
+            position={[TRAIN_TRACK_X, y + 0.07, z]}
+            rotation={[0, 0, Math.atan2(rightY - leftY, 1.9)]}
+            material={materials.stationWood}
+            receiveShadow
+          >
             <boxGeometry args={[1.9, 0.14, 0.2]} />
           </mesh>
         );
       })}
-      {[-0.55, 0.55].map((offset) => (
-        <mesh
-          key={offset}
-          position={[TRAIN_TRACK_X + offset, terrainHeight(TRAIN_TRACK_X + offset, TRAIN_TRACK_CENTER_Z) + 0.16, TRAIN_TRACK_CENTER_Z]}
-          material={materials.rail}
-          receiveShadow
+      {railGeometries.map((geometry, index) => (
+        <mesh key={`rail-${index}`} geometry={geometry} material={materials.rail} castShadow receiveShadow />
+      ))}
+      {TRAIN_RAIL_OFFSETS.flatMap((offset) => [TRAIN_TRACK_START_Z, TRAIN_TRACK_END_Z].map((z) => {
+        const x = TRAIN_TRACK_X + offset;
+        return (
+          <mesh
+            key={`rail-cap-${offset}-${z}`}
+            position={[x, terrainHeight(x, z) + 0.195, z]}
+            geometry={railEndCapGeometry}
+            material={materials.rail}
+            castShadow
+          />
+        );
+      }))}
+      {[
+        { z: TRAIN_TRACK_START_Z, direction: 1 },
+        { z: TRAIN_TRACK_END_Z, direction: -1 },
+      ].map(({ z, direction }) => (
+        <group
+          key={`track-buffer-${z}`}
+          position={[TRAIN_TRACK_X, terrainHeight(TRAIN_TRACK_X, z), z + direction * 0.1]}
         >
-          <boxGeometry args={[0.1, 0.1, 12.1]} />
-        </mesh>
+          {[-0.72, 0.72].map((x) => (
+            <mesh key={x} position={[x, 0.3, 0]} material={materials.stationWood} castShadow receiveShadow>
+              <boxGeometry args={[0.16, 0.6, 0.18]} />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.62, 0]} material={materials.trim} castShadow receiveShadow>
+            <boxGeometry args={[1.8, 0.18, 0.2]} />
+          </mesh>
+          {[-0.52, 0.52].map((x) => (
+            <mesh key={`buffer-plate-${x}`} position={[x, 0.62, direction * 0.105]} material={materials.rail}>
+              <boxGeometry args={[0.13, 0.22, 0.025]} />
+            </mesh>
+          ))}
+        </group>
       ))}
 
       <group position={[TRAIN_STATION_POSITION.x, stationY, TRAIN_STATION_POSITION.z]} rotation={[0, -Math.PI / 2, 0]}>
@@ -2974,6 +3546,7 @@ function StationAndTrain({ walkerPosition, reducedMotion }) {
 
       <group
         ref={train}
+        visible={false}
         position={[TRAIN_TRACK_X, terrainHeight(TRAIN_TRACK_X, TRAIN_START_Z) + 0.06, TRAIN_START_Z]}
         rotation={[0, Math.PI / 2, 0]}
       >
@@ -3049,11 +3622,16 @@ function Terrain({
   dogActive,
   isInsideCabin,
   onDoorOpen,
+  computerState,
+  onComputerSeat,
+  onComputerInitialize,
   walkerPosition,
 }) {
   const geometry = useMemo(() => createTerrainGeometry(), []);
+  const cliffGeometry = useMemo(() => createTerrainCliffGeometry(), []);
   const branchTrailGeometry = useMemo(() => createBranchTrailGeometry(), []);
   const stationTrailGeometry = useMemo(() => createStationTrailGeometry(), []);
+  const trainTrailGeometry = useMemo(() => createTrainTrailGeometry(), []);
   const cabinTrailGeometry = useMemo(() => createCabinTrailGeometry(), []);
   const mountainTrailGeometry = useMemo(() => createMountainTrailGeometry(), []);
   const mesh = useRef(null);
@@ -3070,27 +3648,45 @@ function Terrain({
     roughness: 0.94,
     metalness: 0,
   }), [terrainMaps]);
-  const branchTrailMaterial = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#efc995',
-    emissive: '#3b2719',
-    emissiveIntensity: 0.15,
-    roughness: 0.72,
-    metalness: 0.02,
+  const cliffMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    vertexColors: true,
+    roughness: 0.98,
+    metalness: 0,
+    flatShading: true,
+    side: THREE.DoubleSide,
+    fog: true,
   }), []);
+  const branchTrailMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#9c4128',
+    map: terrainMaps.colorMap,
+    normalMap: terrainMaps.normalMap,
+    normalScale: new THREE.Vector2(0.22, 0.22),
+    roughnessMap: terrainMaps.roughnessMap,
+    bumpMap: terrainMaps.bumpMap,
+    bumpScale: 0.018,
+    emissive: '#2b1712',
+    emissiveIntensity: 0.05,
+    roughness: 0.97,
+    metalness: 0,
+  }), [terrainMaps]);
 
   useEffect(() => () => {
     geometry.dispose();
+    cliffGeometry.dispose();
     branchTrailGeometry.dispose();
     stationTrailGeometry.dispose();
+    trainTrailGeometry.dispose();
     cabinTrailGeometry.dispose();
     mountainTrailGeometry.dispose();
     terrainMaterial.dispose();
+    cliffMaterial.dispose();
     branchTrailMaterial.dispose();
     terrainMaps.colorMap.dispose();
     terrainMaps.normalMap.dispose();
     terrainMaps.bumpMap.dispose();
     terrainMaps.roughnessMap.dispose();
-  }, [branchTrailGeometry, branchTrailMaterial, cabinTrailGeometry, geometry, mountainTrailGeometry, stationTrailGeometry, terrainMaps, terrainMaterial]);
+  }, [branchTrailGeometry, branchTrailMaterial, cabinTrailGeometry, cliffGeometry, cliffMaterial, geometry, mountainTrailGeometry, stationTrailGeometry, terrainMaps, terrainMaterial, trainTrailGeometry]);
 
   useFrame((_, delta) => {
     if (!mesh.current || reducedMotion) return;
@@ -3102,10 +3698,14 @@ function Terrain({
       <mesh geometry={geometry} receiveShadow>
         <primitive object={terrainMaterial} attach="material" />
       </mesh>
+      <mesh geometry={cliffGeometry} material={cliffMaterial} castShadow receiveShadow />
       <mesh geometry={branchTrailGeometry} receiveShadow>
         <primitive object={branchTrailMaterial} attach="material" />
       </mesh>
       <mesh geometry={stationTrailGeometry} receiveShadow>
+        <primitive object={branchTrailMaterial} attach="material" />
+      </mesh>
+      <mesh geometry={trainTrailGeometry} receiveShadow>
         <primitive object={branchTrailMaterial} attach="material" />
       </mesh>
       <mesh geometry={cabinTrailGeometry} receiveShadow>
@@ -3116,19 +3716,22 @@ function Terrain({
       </mesh>
       <MountainStream reducedMotion={reducedMotion} />
       <ScenicBridge />
-      <HorizonMountains />
+      <HorizonMountains terrainMaps={terrainMaps} />
       <LogCabin
         reducedMotion={reducedMotion}
         dogActive={dogActive}
         isInsideCabin={isInsideCabin}
         onDoorOpen={onDoorOpen}
+        computerReady={computerState === 'ready'}
+        onComputerSeat={onComputerSeat}
+        onComputerInitialize={onComputerInitialize}
       />
       <CabinGrove />
       <RiversideTree reducedMotion={reducedMotion} />
       <MountainRocks />
       <Forest />
-      <MeadowGrass reducedMotion={reducedMotion} />
-      <Wildflowers reducedMotion={reducedMotion} />
+      <MeadowGrass reducedMotion={reducedMotion} walkerPosition={walkerPosition} />
+      <Wildflowers reducedMotion={reducedMotion} walkerPosition={walkerPosition} />
       <ForestTurtle reducedMotion={reducedMotion} />
       <PathStones />
       <StationAndTrain walkerPosition={walkerPosition} reducedMotion={reducedMotion} />
@@ -3200,12 +3803,148 @@ function Limb({ position, rotation = [0, 0, 0], color, material, radius = 0.12, 
   );
 }
 
+function createComputerScreenTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 320;
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#061217';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#15323a';
+  context.fillRect(0, 0, canvas.width, 36);
+  context.fillStyle = '#70e9df';
+  context.font = 'bold 15px monospace';
+  context.fillText('GABY.OS  //  GALACTIC LINK', 18, 24);
+
+  const codeLines = [
+    ['> booting memory core...', '#7ee8dc'],
+    ['  loading star atlas [OK]', '#d3b77b'],
+    ['  linking orbital nodes...', '#7ee8dc'],
+    ['  resolving signal paths', '#9cb8c0'],
+    ['  portal sequence ready', '#d3b77b'],
+    ['> waiting for input_', '#7ee8dc'],
+  ];
+  context.font = '14px monospace';
+  codeLines.forEach(([line, color], index) => {
+    context.fillStyle = color;
+    context.fillText(line, 22, 72 + index * 29);
+  });
+  context.fillStyle = 'rgba(77, 228, 218, 0.12)';
+  context.fillRect(14, 255, 484, 44);
+  context.fillStyle = '#a1fff3';
+  context.font = 'bold 14px monospace';
+  context.textAlign = 'center';
+  context.fillText('PRESS TO INITIALIZE', 256, 282);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createSkinMaps() {
+  const size = 1024;
+  const colorCanvas = document.createElement('canvas');
+  const normalCanvas = document.createElement('canvas');
+  const roughnessCanvas = document.createElement('canvas');
+  [colorCanvas, normalCanvas, roughnessCanvas].forEach((canvas) => {
+    canvas.width = size;
+    canvas.height = size;
+  });
+
+  const colorContext = colorCanvas.getContext('2d');
+  const normalContext = normalCanvas.getContext('2d');
+  const roughnessContext = roughnessCanvas.getContext('2d');
+  const colorImage = colorContext.createImageData(size, size);
+  const normalImage = normalContext.createImageData(size, size);
+  const roughnessImage = roughnessContext.createImageData(size, size);
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const index = (y * size + x) * 4;
+      const pores = Math.sin(x * 1.71 + Math.sin(y * 0.43)) * Math.sin(y * 1.37 + x * 0.19);
+      const broadTone = Math.sin(x * 0.016) * 2.8 + Math.cos(y * 0.021) * 2.2;
+      const tone = pores * 2.2 + broadTone;
+      colorImage.data[index] = 224 + tone;
+      colorImage.data[index + 1] = 174 + tone * 0.82;
+      colorImage.data[index + 2] = 151 + tone * 0.72;
+      colorImage.data[index + 3] = 255;
+
+      normalImage.data[index] = 127 + pores * 7;
+      normalImage.data[index + 1] = 127 - pores * 7;
+      normalImage.data[index + 2] = 252;
+      normalImage.data[index + 3] = 255;
+
+      const roughness = 218 - Math.max(0, pores) * 9;
+      roughnessImage.data[index] = roughness;
+      roughnessImage.data[index + 1] = roughness;
+      roughnessImage.data[index + 2] = roughness;
+      roughnessImage.data[index + 3] = 255;
+    }
+  }
+
+  colorContext.putImageData(colorImage, 0, 0);
+  normalContext.putImageData(normalImage, 0, 0);
+  roughnessContext.putImageData(roughnessImage, 0, 0);
+
+  colorContext.strokeStyle = 'rgba(125, 70, 61, 0.12)';
+  colorContext.lineWidth = 2;
+  [[0.26, 0.47], [0.73, 0.52], [0.49, 0.83]].forEach(([x, y]) => {
+    colorContext.beginPath();
+    colorContext.moveTo(x * size, y * size);
+    colorContext.quadraticCurveTo((x + 0.035) * size, (y - 0.012) * size, (x + 0.07) * size, (y + 0.005) * size);
+    colorContext.stroke();
+  });
+
+  const colorMap = new THREE.CanvasTexture(colorCanvas);
+  colorMap.colorSpace = THREE.SRGBColorSpace;
+  const normalMap = new THREE.CanvasTexture(normalCanvas);
+  const roughnessMap = new THREE.CanvasTexture(roughnessCanvas);
+  [colorMap, normalMap, roughnessMap].forEach((texture) => {
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.anisotropy = 4;
+  });
+
+  return { colorMap, normalMap, roughnessMap };
+}
+
+function createSkinMaterial(skinMaps, tint) {
+  const material = new THREE.MeshPhysicalMaterial({
+    color: tint,
+    map: skinMaps.colorMap,
+    normalMap: skinMaps.normalMap,
+    normalScale: new THREE.Vector2(0.16, 0.16),
+    roughnessMap: skinMaps.roughnessMap,
+    roughness: 0.88,
+    metalness: 0,
+    clearcoat: 0.035,
+    clearcoatRoughness: 0.82,
+    sheen: 0.08,
+    sheenColor: '#f0bba5',
+    sheenRoughness: 0.92,
+    emissive: '#6b2918',
+    emissiveIntensity: 0.018,
+  });
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <lights_fragment_end>',
+      `#include <lights_fragment_end>
+      float skinFacing = max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0);
+      float skinEdgeScatter = pow(1.0 - skinFacing, 3.0);
+      totalEmissiveRadiance += vec3(0.026, 0.008, 0.004) * skinEdgeScatter;`,
+    );
+  };
+  material.customProgramCacheKey = () => 'skin-edge-scatter-v1';
+  return material;
+}
+
 function createTaperedArmGeometry(points, startRadius, endRadius) {
   const curve = new THREE.CatmullRomCurve3(points.map((point) => new THREE.Vector3(...point)));
-  const tubularSegments = 20;
-  const radialSegments = 10;
+  const tubularSegments = 40;
+  const radialSegments = 24;
   const frames = curve.computeFrenetFrames(tubularSegments, false);
   const positions = [];
+  const uvs = [];
   const indices = [];
 
   for (let ring = 0; ring <= tubularSegments; ring += 1) {
@@ -3221,6 +3960,7 @@ function createTaperedArmGeometry(points, startRadius, endRadius) {
         point.y + radius * (normal.y + binormal.y),
         point.z + radius * (normal.z + binormal.z),
       );
+      uvs.push(side / radialSegments, t);
 
       if (ring < tubularSegments && side < radialSegments) {
         const current = ring * (radialSegments + 1) + side;
@@ -3233,20 +3973,36 @@ function createTaperedArmGeometry(points, startRadius, endRadius) {
   const geometry = new THREE.BufferGeometry();
   geometry.setIndex(indices);
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   return geometry;
 }
 
-function Hand({ mirror = 1, material }) {
-  const fingerLengths = [0.155, 0.19, 0.17, 0.14];
+function Hand({ mirror = 1, scale = 1, material, creaseMaterial }) {
+  const creaseGeometries = useMemo(() => [
+    [[-0.052, -0.018, 0.047], [-0.018, -0.035, 0.051], [0.018, -0.034, 0.05], [0.051, -0.014, 0.044]],
+    [[-0.044, -0.067, 0.044], [-0.012, -0.055, 0.052], [0.023, -0.057, 0.049], [0.045, -0.071, 0.041]],
+  ].map((points) => new THREE.TubeGeometry(
+    new THREE.CatmullRomCurve3(points.map((point) => new THREE.Vector3(...point))),
+    16,
+    0.0018,
+    5,
+    false,
+  )), []);
+  useEffect(() => () => creaseGeometries.forEach((geometry) => geometry.dispose()), [creaseGeometries]);
+
+  const fingerLengths = [0.145, 0.17, 0.16, 0.13];
   return (
-    <group scale={[mirror * 0.82, 0.88, 0.8]}>
+    <group scale={[mirror * 0.82 * scale, 0.88 * scale, 0.8 * scale]}>
       <mesh position={[0, -0.04, 0]} scale={[0.078, 0.098, 0.052]} material={material} castShadow>
-        <sphereGeometry args={[1, 12, 9]} />
+        <sphereGeometry args={[1, 28, 20]} />
       </mesh>
-      <mesh position={[0, 0.035, 0]} material={material} castShadow>
-        <capsuleGeometry args={[0.037, 0.055, 4, 8]} />
+      {creaseGeometries.map((geometry, index) => (
+        <mesh key={index} geometry={geometry} material={creaseMaterial} />
+      ))}
+      <mesh position={[0, 0.035, 0]} material={material} castShadow receiveShadow>
+        <capsuleGeometry args={[0.037, 0.055, 8, 20]} />
       </mesh>
       {fingerLengths.map((length, index) => {
         const x = (index - 1.5) * 0.037;
@@ -3254,15 +4010,25 @@ function Hand({ mirror = 1, material }) {
         const secondJointLength = length * 0.42;
         return (
           <group key={index} position={[x, -0.115, 0.005]} rotation={[0, 0, (index - 1.5) * -0.055]}>
-            <mesh position={[0, -firstJointLength * 0.38, 0]} material={material} castShadow>
-              <capsuleGeometry args={[0.014, firstJointLength * 0.62, 4, 8]} />
+            <mesh position={[0, -firstJointLength * 0.38, 0]} material={material} castShadow receiveShadow>
+              <capsuleGeometry args={[0.014, firstJointLength * 0.62, 8, 16]} />
+            </mesh>
+            <mesh position={[0, -firstJointLength * 0.76, 0]} scale={[0.014, 0.014, 0.014]} material={material} castShadow>
+              <sphereGeometry args={[1, 14, 10]} />
             </mesh>
             <group position={[0, -firstJointLength * 0.76, 0]} rotation={[0, 0, index === 3 ? 0.08 : 0]}>
-              <mesh position={[0, -secondJointLength * 0.34, 0]} material={material} castShadow>
-                <capsuleGeometry args={[0.011, secondJointLength * 0.55, 4, 8]} />
+              <mesh position={[0, -secondJointLength * 0.34, 0]} material={material} castShadow receiveShadow>
+                <capsuleGeometry args={[0.011, secondJointLength * 0.55, 8, 16]} />
               </mesh>
               <mesh position={[0, -secondJointLength * 0.76, 0.003]} scale={[0.8, 0.88, 0.8]} material={material} castShadow>
-                <sphereGeometry args={[0.015, 8, 6]} />
+                <sphereGeometry args={[0.015, 16, 12]} />
+              </mesh>
+              <mesh
+                position={[0, -secondJointLength * 0.74, 0.012]}
+                scale={[0.0065, 0.011, 0.0015]}
+                material={creaseMaterial}
+              >
+                <sphereGeometry args={[1, 12, 8]} />
               </mesh>
             </group>
           </group>
@@ -3270,10 +4036,10 @@ function Hand({ mirror = 1, material }) {
       })}
       <group position={[mirror * 0.065, -0.005, 0.01]} rotation={[0, 0, mirror * -0.72]}>
         <mesh position={[0, -0.065, 0]} material={material} castShadow>
-          <capsuleGeometry args={[0.021, 0.095, 4, 7]} />
+          <capsuleGeometry args={[0.021, 0.095, 8, 16]} />
         </mesh>
         <mesh position={[0, -0.12, 0]} material={material} castShadow>
-          <sphereGeometry args={[0.02, 8, 6]} />
+          <sphereGeometry args={[0.02, 14, 10]} />
         </mesh>
       </group>
     </group>
@@ -3411,7 +4177,7 @@ function StrawHat() {
   return (
     <group rotation={[0.05, 0, -0.12]}>
       <mesh castShadow>
-        <cylinderGeometry args={[0.7, 0.74, 0.075, 40]} />
+        <cylinderGeometry args={[0.76, 0.8, 0.075, 40]} />
         <primitive object={strawMaterial} attach="material" />
       </mesh>
       <mesh position={[0, 0.17, 0]} castShadow>
@@ -3449,6 +4215,29 @@ function createFabricMaps() {
     colorContext.moveTo(0, index);
     colorContext.lineTo(size, index);
     colorContext.stroke();
+  }
+  const flowerColors = ['#d58d99', '#c998b8', '#d2a759'];
+  for (let y = 18, row = 0; y < size; y += 32, row += 1) {
+    for (let x = 18, column = 0; x < size; x += 32, column += 1) {
+      const petalColor = flowerColors[(row + column) % flowerColors.length];
+      for (let petal = 0; petal < 5; petal += 1) {
+        const angle = (petal / 5) * Math.PI * 2;
+        colorContext.beginPath();
+        colorContext.arc(
+          x + Math.cos(angle) * 3.8,
+          y + Math.sin(angle) * 3.8,
+          2.3,
+          0,
+          Math.PI * 2,
+        );
+        colorContext.fillStyle = petalColor;
+        colorContext.fill();
+      }
+      colorContext.beginPath();
+      colorContext.arc(x, y, 1.7, 0, Math.PI * 2);
+      colorContext.fillStyle = '#e2bc6f';
+      colorContext.fill();
+    }
   }
 
   const bumpCanvas = document.createElement('canvas');
@@ -3664,6 +4453,8 @@ function Walker({
   setPorchWalkingAudio,
   exitCabinRequested,
   onCabinExitComplete,
+  computerState,
+  onComputerSeated,
   positionRef,
   isInsideCabin,
   isNearReader,
@@ -3677,6 +4468,8 @@ function Walker({
   const rightLeg = useRef(null);
   const leftArm = useRef(null);
   const rightArm = useRef(null);
+  const leftElbow = useRef(null);
+  const rightElbow = useRef(null);
   const { camera, gl } = useThree();
   const desiredCameraPosition = useMemo(() => new THREE.Vector3(), []);
   const cameraTarget = useMemo(() => new THREE.Vector3(), []);
@@ -3688,6 +4481,12 @@ function Walker({
   ), []);
   const direction = useMemo(() => new THREE.Vector3(), []);
   const walkStartedAt = useRef(null);
+  const computerSeatedReported = useRef(false);
+  const computerSeatTarget = useMemo(() => new THREE.Vector3(
+    CABIN_X + 0.98,
+    terrainHeight(CABIN_X + 0.98, CABIN_LOCAL_Z + 0.37),
+    CABIN_LOCAL_Z + 1 + 0.37,
+  ), []);
 
   useEffect(() => {
     if (!isInsideCabin) return undefined;
@@ -3776,7 +4575,7 @@ function Walker({
       0.06,
     ),
     leftForearm: createTaperedArmGeometry(
-      [[-0.075, -0.32, 0.025], [-0.1, -0.48, 0.035], [-0.12, -0.68, 0.04]],
+      [[0, 0, 0], [-0.025, -0.15, 0.01], [-0.045, -0.35, 0.015]],
       0.058,
       0.044,
     ),
@@ -3786,7 +4585,7 @@ function Walker({
       0.06,
     ),
     rightForearm: createTaperedArmGeometry(
-      [[0.075, -0.32, 0.025], [0.1, -0.48, 0.035], [0.12, -0.68, 0.04]],
+      [[0, 0, 0], [0.025, -0.15, 0.01], [0.045, -0.35, 0.015]],
       0.058,
       0.044,
     ),
@@ -3944,10 +4743,11 @@ function Walker({
       flapStitch: new THREE.TubeGeometry(flapCurve, 24, 0.003, 5, false),
     };
   }, []);
-  const handMaterial = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#e3b49b',
-    roughness: 0.9,
-    metalness: 0.01,
+  const skinMaps = useMemo(() => createSkinMaps(), []);
+  const handMaterial = useMemo(() => createSkinMaterial(skinMaps, '#fff3ec'), [skinMaps]);
+  const handCreaseMaterial = useMemo(() => new THREE.MeshStandardMaterial({
+    color: '#a76f61',
+    roughness: 0.94,
   }), []);
   const sleeveMaterial = useMemo(() => new THREE.MeshStandardMaterial({
     color: '#e4ddd0',
@@ -3957,6 +4757,7 @@ function Walker({
   const faceMaterials = useMemo(() => ({
     eyes: new THREE.MeshStandardMaterial({ color: '#382723', roughness: 0.55 }),
     lips: new THREE.MeshStandardMaterial({ color: '#965d58', roughness: 0.82 }),
+    brows: new THREE.MeshStandardMaterial({ color: '#57352c', roughness: 0.92 }),
   }), []);
   const sneakerMaterials = useMemo(() => ({
     upper: new THREE.MeshStandardMaterial({ color: '#d8d0bd', roughness: 0.86 }),
@@ -3998,6 +4799,10 @@ function Walker({
     claspMaterial.dispose();
     stitchMaterial.dispose();
     handMaterial.dispose();
+    handCreaseMaterial.dispose();
+    skinMaps.colorMap.dispose();
+    skinMaps.normalMap.dispose();
+    skinMaps.roughnessMap.dispose();
     sleeveMaterial.dispose();
     Object.values(faceMaterials).forEach((material) => material.dispose());
     Object.values(sneakerMaterials).forEach((material) => material.dispose());
@@ -4016,6 +4821,8 @@ function Walker({
     fabricMaterial,
     flapGeometry,
     handMaterial,
+    handCreaseMaterial,
+    skinMaps,
     leatherGeometry,
     pocketGeometry,
     sneakerMaterials,
@@ -4054,9 +4861,34 @@ function Walker({
     const horizontal = Number(input.right) - Number(input.left);
     const vertical = Number(input.backward) - Number(input.forward);
     const exitingCabin = enteredCabin.current && exitCabinRequested;
-    const moving = exitingCabin || horizontal !== 0 || vertical !== 0;
+    const computerDistance = Math.hypot(
+      root.current.position.x - computerSeatTarget.x,
+      root.current.position.z - computerSeatTarget.z,
+    );
+    const movingToComputer = computerState === 'seating' && computerDistance > 0.055;
+    if (computerState === 'idle') computerSeatedReported.current = false;
+    const moving = movingToComputer || (
+      computerState === 'idle' && (exitingCabin || horizontal !== 0 || vertical !== 0)
+    );
 
-    if (moving) {
+    if (computerState === 'seating') {
+      direction.set(0, 0, -1);
+      if (computerDistance <= 0.055) {
+        root.current.position.copy(computerSeatTarget);
+        walkStartedAt.current = null;
+        if (!computerSeatedReported.current) {
+          computerSeatedReported.current = true;
+          onComputerSeated?.();
+        }
+      } else {
+        const damping = 1 - Math.exp(-delta * 2.8);
+        root.current.position.x = THREE.MathUtils.lerp(root.current.position.x, computerSeatTarget.x, damping);
+        root.current.position.y = THREE.MathUtils.lerp(root.current.position.y, computerSeatTarget.y, damping);
+        root.current.position.z = THREE.MathUtils.lerp(root.current.position.z, computerSeatTarget.z, damping);
+        walkStartedAt.current ??= time;
+      }
+      root.current.rotation.y = THREE.MathUtils.damp(root.current.rotation.y, 0, 4, delta);
+    } else if (moving) {
       const speed = input.sprint ? 6.2 : 4;
       if (exitingCabin) {
         direction.set(0, 0, 1);
@@ -4079,6 +4911,9 @@ function Walker({
         }
         if (localZ >= -15.8 && localZ <= -12.4) {
           trailBounds.push({ center: stationTrailCenterX(localZ), halfWidth: 1.8 });
+        }
+        if (localZ >= TRAIN_TRACK_END_Z && localZ <= TRAIN_TRACK_START_Z) {
+          trailBounds.push({ center: trainTrailCenterX(localZ), halfWidth: 1.35 });
         }
         if (localZ >= CABIN_TRAIL_END_Z - 0.4 && localZ <= 2.7) {
           trailBounds.push({ center: cabinTrailCenterX(localZ), halfWidth: 1.5 });
@@ -4148,8 +4983,8 @@ function Walker({
       && root.current.position.x <= CABIN_X + 2.6
       && root.current.position.z >= CABIN_LOCAL_Z + 1 + 1.45
       && root.current.position.z <= CABIN_LOCAL_Z + 1 + 3.45;
-    setWalkingAudio(moving && !onCabinPorch);
-    setPorchWalkingAudio(moving && onCabinPorch);
+    setWalkingAudio(moving && !onCabinPorch && computerState !== 'seating');
+    setPorchWalkingAudio(moving && onCabinPorch && computerState !== 'seating');
     const localZ = root.current.position.z - 1;
     const isNearCabin = Math.hypot(
       root.current.position.x - 11.1,
@@ -4207,14 +5042,29 @@ function Walker({
     const walkTime = walkStartedAt.current == null ? time * 0.35 : (time - walkStartedAt.current) * 9;
     const step = moving ? Math.sin(walkTime) : 0;
     const walkAmplitude = reducedMotion ? 0.14 : 0.42;
-    body.current.position.y = moving && !reducedMotion
+    const seatedAtComputer = computerState === 'ready' || computerState === 'transitioning';
+    body.current.position.y = seatedAtComputer
+      ? -0.28
+      : moving && !reducedMotion
       ? Math.abs(step) * 0.055
       : Math.sin(time * 1.1) * (reducedMotion ? 0 : 0.018);
-    body.current.rotation.z = moving ? Math.sin(walkTime) * (reducedMotion ? 0.008 : 0.025) : 0;
-    if (leftLeg.current) leftLeg.current.rotation.x = moving ? step * walkAmplitude : 0;
-    if (rightLeg.current) rightLeg.current.rotation.x = moving ? -step * walkAmplitude : 0;
-    if (leftArm.current) leftArm.current.rotation.x = moving ? -step * walkAmplitude * 0.6 : 0;
-    if (rightArm.current) rightArm.current.rotation.x = moving ? step * walkAmplitude * 0.52 : 0;
+    body.current.rotation.z = seatedAtComputer ? 0 : moving ? Math.sin(walkTime) * (reducedMotion ? 0.008 : 0.025) : 0;
+    if (leftLeg.current) leftLeg.current.position.y = seatedAtComputer ? 0.82 : 0.54;
+    if (rightLeg.current) rightLeg.current.position.y = seatedAtComputer ? 0.82 : 0.54;
+    if (leftLeg.current) leftLeg.current.rotation.x = seatedAtComputer ? 1.15 : moving ? step * walkAmplitude : 0;
+    if (rightLeg.current) rightLeg.current.rotation.x = seatedAtComputer ? 1.15 : moving ? -step * walkAmplitude : 0;
+    if (leftArm.current) leftArm.current.rotation.x = seatedAtComputer ? 0.2 : moving ? -step * walkAmplitude * 0.6 : 0;
+    if (rightArm.current) rightArm.current.rotation.x = seatedAtComputer ? 0.2 : moving ? step * walkAmplitude * 0.52 : 0;
+    if (leftElbow.current) {
+      leftElbow.current.rotation.x = seatedAtComputer ? 0.26 : moving ? Math.sin(walkTime + Math.PI) * 0.12 : 0;
+    }
+    if (rightElbow.current) {
+      rightElbow.current.rotation.x = seatedAtComputer
+        ? 0.26
+        : isNearReader
+        ? 0.18
+        : moving ? Math.sin(walkTime) * 0.12 : 0;
+    }
     if (!isNearReader) {
       if (leftArm.current) {
         leftArm.current.rotation.z = THREE.MathUtils.damp(
@@ -4239,7 +5089,7 @@ function Walker({
     }
 
     positionRef.current.copy(root.current.position);
-    if (time > 2.4) {
+    if (time > 2.4 && computerState !== 'transitioning') {
       if (enteredCabin.current) {
         const { yaw, pitch } = cabinOrbit.current;
         desiredCameraPosition.set(
@@ -4360,6 +5210,17 @@ function Walker({
             <sphereGeometry args={[1, 10, 8]} />
           </mesh>
         ))}
+        {[-1, 1].map((side) => (
+          <mesh
+            key={`brow-${side}`}
+            position={[side * 0.075, 2.043, -0.247]}
+            rotation={[0, 0, side * 0.1]}
+            scale={[0.034, 0.008, 0.006]}
+            material={faceMaterials.brows}
+          >
+            <sphereGeometry args={[1, 10, 6]} />
+          </mesh>
+        ))}
         <mesh position={[0, 1.95, -0.26]} scale={[0.08, 0.12, 0.1]} material={handMaterial}>
           <sphereGeometry args={[0.23, 10, 8]} />
         </mesh>
@@ -4371,6 +5232,17 @@ function Walker({
             <latheGeometry args={[hairProfile, 20]} />
             <meshStandardMaterial color="#57352c" roughness={0.93} />
           </mesh>
+          {[-1, 1].map((side) => (
+            <mesh
+              key={`hair-lock-${side}`}
+              position={[side * 0.2, -0.31, -0.065]}
+              rotation={[0.04, 0, side * -0.08]}
+              castShadow
+            >
+              <capsuleGeometry args={[0.062, 0.5, 5, 9]} />
+              <meshStandardMaterial color={side < 0 ? '#704a35' : '#68422f'} roughness={0.92} />
+            </mesh>
+          ))}
         </group>
 
         <group ref={leftLeg} position={[-0.19, 0.54, 0]}>
@@ -4398,27 +5270,31 @@ function Walker({
 
         <group ref={leftArm} position={[-0.27, 1.58, 0]}>
           <mesh geometry={armGeometries.leftUpper} material={sleeveMaterial} castShadow />
-          <mesh position={[-0.075, -0.33, 0.025]} scale={[0.061, 0.064, 0.058]} material={sleeveMaterial} castShadow>
-            <sphereGeometry args={[1, 12, 9]} />
-          </mesh>
-          <mesh geometry={armGeometries.leftForearm} material={sleeveMaterial} castShadow />
-          <group position={[-0.12, -0.68, 0.04]}>
-            <Hand material={handMaterial} />
+          <group ref={leftElbow} position={[-0.075, -0.33, 0.025]}>
+            <mesh scale={[0.061, 0.064, 0.058]} material={sleeveMaterial} castShadow>
+              <sphereGeometry args={[1, 20, 14]} />
+            </mesh>
+            <mesh geometry={armGeometries.leftForearm} material={sleeveMaterial} castShadow />
+            <group position={[-0.045, -0.35, 0.015]}>
+              <Hand material={handMaterial} creaseMaterial={handCreaseMaterial} />
+            </group>
           </group>
         </group>
         <group ref={rightArm} position={[0.27, 1.58, 0]}>
           <mesh geometry={armGeometries.rightUpper} material={sleeveMaterial} castShadow />
-          <mesh position={[0.075, -0.33, 0.025]} scale={[0.061, 0.064, 0.058]} material={sleeveMaterial} castShadow>
-            <sphereGeometry args={[1, 12, 9]} />
-          </mesh>
-          <mesh geometry={armGeometries.rightForearm} material={sleeveMaterial} castShadow />
-          <group position={[0.12, -0.68, 0.04]} rotation={[0, 0, 0.06]}>
-            <Hand mirror={-1} material={handMaterial} />
+          <group ref={rightElbow} position={[0.075, -0.33, 0.025]}>
+            <mesh scale={[0.061, 0.064, 0.058]} material={sleeveMaterial} castShadow>
+              <sphereGeometry args={[1, 20, 14]} />
+            </mesh>
+            <mesh geometry={armGeometries.rightForearm} material={sleeveMaterial} castShadow />
+            <group position={[0.045, -0.35, 0.015]} rotation={[0, 0, 0.06]}>
+              <Hand mirror={-1} material={handMaterial} creaseMaterial={handCreaseMaterial} />
+            </group>
+            <mesh position={[0.035, -0.12, 0.005]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+              <torusGeometry args={[0.074, 0.009, 8, 28]} />
+              <meshStandardMaterial color="#d6b56f" metalness={0.72} roughness={0.32} />
+            </mesh>
           </group>
-          <mesh position={[0.11, -0.45, 0.03]} rotation={[Math.PI / 2, 0, 0]} castShadow>
-            <torusGeometry args={[0.074, 0.009, 8, 28]} />
-            <meshStandardMaterial color="#d6b56f" metalness={0.72} roughness={0.32} />
-          </mesh>
         </group>
         <group position={[0, 2.2, -0.035]} scale={0.75}>
           <StrawHat />
@@ -4454,6 +5330,58 @@ function CameraArrival({ reducedMotion }) {
   return null;
 }
 
+function CabinComputerTransition({ active, reducedMotion, onComplete }) {
+  const { camera } = useThree();
+
+  useEffect(() => {
+    if (!active) return undefined;
+
+    const target = new THREE.Vector3(
+      CABIN_X + 0.98,
+      terrainHeight(CABIN_X, CABIN_LOCAL_Z) + 1.13,
+      CABIN_LOCAL_Z + 1 - 0.73,
+    );
+    const destination = new THREE.Vector3(target.x, target.y, target.z + 0.72);
+    if (reducedMotion) {
+      camera.position.copy(destination);
+      camera.lookAt(target);
+      onComplete?.();
+      return undefined;
+    }
+
+    const startTarget = camera.position.clone().add(
+      camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(5),
+    );
+    const lookTarget = { x: startTarget.x, y: startTarget.y, z: startTarget.z };
+    const transition = gsap.timeline({
+      onUpdate: () => {
+        camera.lookAt(lookTarget.x, lookTarget.y, lookTarget.z);
+        camera.updateProjectionMatrix();
+      },
+      onComplete,
+    });
+    transition
+      .to(camera.position, {
+        x: destination.x,
+        y: destination.y,
+        z: destination.z,
+        duration: 1.75,
+        ease: 'power3.inOut',
+      }, 0)
+      .to(lookTarget, {
+        x: target.x,
+        y: target.y,
+        z: target.z,
+        duration: 1.75,
+        ease: 'power3.inOut',
+      }, 0);
+
+    return () => transition.kill();
+  }, [active, camera, onComplete, reducedMotion]);
+
+  return null;
+}
+
 function RealWorldScene({
   reducedMotion,
   audioLevel,
@@ -4463,6 +5391,10 @@ function RealWorldScene({
   playAudioEffect,
   exitCabinRequested,
   onCabinExitComplete,
+  computerState,
+  onComputerSeat,
+  onComputerSeated,
+  onComputerInitialize,
   journeyState,
   onJourneyStateChange,
   onEnterGalaxy,
@@ -4471,6 +5403,10 @@ function RealWorldScene({
   const walkerPosition = useRef(new THREE.Vector3(
     ...WALKER_START_POSITION,
   ));
+  const finishComputerTransition = useCallback(
+    () => onEnterGalaxy?.({ audioAlreadyPlayed: true }),
+    [onEnterGalaxy],
+  );
   const trailLetters = useMemo(
     () => [...'GABYEDWIN'].map((character, index) => {
       const localZ = -0.6;
@@ -4514,7 +5450,15 @@ function RealWorldScene({
         dogActive={journeyState.isNearCabin}
         isInsideCabin={journeyState.isInsideCabin}
         onDoorOpen={onCabinDoorOpen}
+        computerState={computerState}
+        onComputerSeat={onComputerSeat}
+        onComputerInitialize={onComputerInitialize}
         walkerPosition={walkerPosition}
+      />
+      <CabinComputerTransition
+        active={computerState === 'transitioning'}
+        reducedMotion={reducedMotion}
+        onComplete={finishComputerTransition}
       />
       <Suspense fallback={null}>
         <TrailPhysics
@@ -4538,13 +5482,15 @@ function RealWorldScene({
         setPorchWalkingAudio={setPorchWalkingAudio}
         exitCabinRequested={exitCabinRequested}
         onCabinExitComplete={onCabinExitComplete}
+        computerState={computerState}
+        onComputerSeated={onComputerSeated}
         positionRef={walkerPosition}
         isInsideCabin={journeyState.isInsideCabin}
         isNearReader={journeyState.isNearReader}
         onJourneyStateChange={onJourneyStateChange}
       />
       <ButterflyGuide audioLevel={audioLevel} reducedMotion={reducedMotion} />
-      <fog attach="fog" args={['#bd8292', 23, 70]} />
+      <fog attach="fog" args={['#aa817e', 23, 70]} />
       <EffectComposer multisampling={0}>
         <Bloom
           intensity={journeyState.isNearPortal ? 0.9 : 0.42}
@@ -4557,7 +5503,7 @@ function RealWorldScene({
   );
 }
 
-export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) {
+export default function RealWorldCollage({ onEnterGalaxy }) {
   const shouldReduceMotion = useReducedMotion();
   const {
     audioLevel,
@@ -4568,6 +5514,7 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
   const [sceneReady, setSceneReady] = useState(false);
   const [cabinWelcomeOpen, setCabinWelcomeOpen] = useState(false);
   const [exitCabinRequested, setExitCabinRequested] = useState(false);
+  const [computerState, setComputerState] = useState('idle');
   const [journeyState, setJourneyState] = useState({
     hasMoved: false,
     isNearPortal: false,
@@ -4585,12 +5532,40 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
     sprint: false,
   });
   const portalTransitionStarted = useRef(false);
-  const credentialsTransitionStarted = useRef(false);
   const openCabinWelcome = useCallback(() => {
     setCabinWelcomeOpen(true);
   }, []);
-  const completeCabinExit = useCallback(() => setExitCabinRequested(false), []);
-  const enterGalaxy = useCallback(() => {
+  const seatAtComputer = useCallback(() => {
+    if (!journeyState.isInsideCabin) return;
+    setCabinWelcomeOpen(false);
+    setExitCabinRequested(false);
+    Object.keys(movement.current).forEach((key) => {
+      movement.current[key] = false;
+    });
+    setComputerState((currentState) => (
+      currentState === 'idle' ? 'seating' : currentState
+    ));
+  }, [journeyState.isInsideCabin]);
+  const markComputerSeated = useCallback(() => {
+    setComputerState((currentState) => (
+      currentState === 'seating' ? 'ready' : currentState
+    ));
+  }, []);
+  const initializeComputer = useCallback(() => {
+    if (!journeyState.isInsideCabin) return;
+    if (computerState === 'idle') {
+      seatAtComputer();
+      return;
+    }
+    if (computerState !== 'ready') return;
+    playAudioEffect('galaxy');
+    setComputerState('transitioning');
+  }, [computerState, journeyState.isInsideCabin, playAudioEffect, seatAtComputer]);
+  const completeCabinExit = useCallback(() => {
+    setExitCabinRequested(false);
+    setComputerState('idle');
+  }, []);
+  const enterGalaxy = useCallback((options = {}) => {
     if (portalTransitionStarted.current) return;
     portalTransitionStarted.current = true;
     setWalkingAudio(false, true);
@@ -4598,18 +5573,8 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
     Object.keys(movement.current).forEach((key) => {
       movement.current[key] = false;
     });
-    onEnterGalaxy?.();
+    onEnterGalaxy?.({ audioAlreadyPlayed: options?.audioAlreadyPlayed === true });
   }, [onEnterGalaxy, setWalkingAudio, setPorchWalkingAudio]);
-  const enterCredentials = useCallback(() => {
-    if (credentialsTransitionStarted.current) return;
-    credentialsTransitionStarted.current = true;
-    setWalkingAudio(false, true);
-    setPorchWalkingAudio(false, true);
-    Object.keys(movement.current).forEach((key) => {
-      movement.current[key] = false;
-    });
-    onEnterCredentials?.();
-  }, [onEnterCredentials, setWalkingAudio, setPorchWalkingAudio]);
   const handleJourneyStateChange = useCallback((nextState) => {
     setJourneyState((currentState) => (
       currentState.hasMoved === nextState.hasMoved
@@ -4677,25 +5642,12 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
     return () => window.removeEventListener('keydown', handleJump);
   }, [enterGalaxy, journeyState.isNearPortal]);
 
-  useEffect(() => {
-    if (!journeyState.isNearBridgeDestination) return undefined;
-    const handleDestinationKey = (event) => {
-      if (event.code !== 'Space' || event.repeat) return;
-      const activeElement = document.activeElement;
-      if (activeElement?.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeElement?.tagName)) return;
-      event.preventDefault();
-      enterCredentials();
-    };
-    window.addEventListener('keydown', handleDestinationKey);
-    return () => window.removeEventListener('keydown', handleDestinationKey);
-  }, [enterCredentials, journeyState.isNearBridgeDestination]);
-
   const movementButton = (direction, label, glyph, extraClasses = '') => (
     <button
       key={direction}
       type="button"
       aria-label={label}
-      className={`flex h-12 w-12 touch-none items-center justify-center rounded-xl border border-white/30 bg-black/35 text-lg text-white/90 shadow-lg backdrop-blur-md active:bg-white/25 ${extraClasses}`}
+      className={`relative isolate flex h-12 w-12 touch-none items-center justify-center text-lg text-white/90 ${extraClasses}`}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         movement.current[direction] = true;
@@ -4704,7 +5656,8 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
       onPointerCancel={() => { movement.current[direction] = false; }}
       onLostPointerCapture={() => { movement.current[direction] = false; }}
     >
-      {glyph}
+      <CloudShape fill="rgba(7,18,27,0.45)" />
+      <span className="relative z-10">{glyph}</span>
     </button>
   );
 
@@ -4734,6 +5687,10 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
           setPorchWalkingAudio={setPorchWalkingAudio}
           exitCabinRequested={exitCabinRequested}
           onCabinExitComplete={completeCabinExit}
+          computerState={computerState}
+          onComputerSeat={seatAtComputer}
+          onComputerSeated={markComputerSeated}
+          onComputerInitialize={initializeComputer}
           playAudioEffect={playAudioEffect}
           journeyState={journeyState}
           onJourneyStateChange={handleJourneyStateChange}
@@ -4794,46 +5751,63 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
         animate={{ opacity: 1 }}
         transition={{ duration: shouldReduceMotion ? 0 : 0.25 }}
         aria-live="polite"
-        className="pointer-events-none absolute bottom-[13.5rem] left-1/2 z-10 w-[min(88vw,24rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-[#07121b]/75 px-3 py-2 text-center font-mono text-[9px] leading-relaxed tracking-wide text-white/80 shadow-lg backdrop-blur-md sm:bottom-6 sm:left-6 sm:w-auto sm:translate-x-0 sm:rounded-full sm:px-4"
+        className="pointer-events-none absolute bottom-[13.5rem] left-1/2 z-10 w-[min(88vw,24rem)] -translate-x-1/2 px-6 py-3 text-center font-mono text-[9px] leading-relaxed tracking-wide text-white/85 sm:bottom-6 sm:left-6 sm:w-auto sm:translate-x-0"
       >
-        {journeyState.isNearPortal
-          ? 'ACÉRCATE A LA LUNA · REGRESO AL COSMOS'
-          : journeyState.isNearBridgeDestination
-            ? 'PUENTE CRUZADO · PULSA ESPACIO O EL BOTÓN PARA ABRIR FORMACIÓN'
-          : journeyState.isInsideCabin
-            ? 'ARRASTRA PARA MIRAR ALREDEDOR · USA ↓ PARA SALIR'
-          : journeyState.isAtSummit
-            ? 'CUMBRE · ACÉRCATE A LA LUNA PARA VOLVER AL COSMOS'
-          : journeyState.isNearReader
-            ? 'ALEXIS ESTÁ LEYENDO EN EL BOSQUE · ACÉRCATE PARA SALUDAR'
-            : journeyState.isNearCabin
-              ? 'LA PUERTA ESTÁ ABIERTA · ACÉRCATE Y ENTRA EN LA CABAÑA'
-          : journeyState.hasMoved
-                  ? 'SIGUE EL SENDERO DETRÁS DE LA MONTAÑA · CRUZA EL PUENTE HACIA FORMACIÓN'
-                  : 'USA WASD O LAS FLECHAS · SIGUE EL SENDERO HACIA LA CASITA Y LA MONTAÑA'}
-        {!journeyState.isNearPortal && !journeyState.isNearBridgeDestination && !journeyState.isNearCabin && !journeyState.isNearReader && !journeyState.isAtSummit && !journeyState.hasMoved && (
-          <span className="hidden sm:inline"> · SHIFT PARA CORRER</span>
-        )}
+        <span className="inline-block">
+          {journeyState.isNearPortal
+            ? 'ACÉRCATE A LA LUNA · REGRESO AL COSMOS'
+            : journeyState.isNearBridgeDestination
+              ? 'PUENTE CRUZADO · SIGUE EL SENDERO'
+            : journeyState.isInsideCabin
+              ? 'ARRASTRA PARA MIRAR ALREDEDOR · USA ↓ PARA SALIR'
+            : journeyState.isAtSummit
+              ? 'CUMBRE · ACÉRCATE A LA LUNA PARA VOLVER AL COSMOS'
+            : journeyState.isNearReader
+              ? 'ALEXIS ESTÁ LEYENDO EN EL BOSQUE · ACÉRCATE PARA SALUDAR'
+              : journeyState.isNearCabin
+                ? 'LA PUERTA ESTÁ ABIERTA · ACÉRCATE Y ENTRA EN LA CABAÑA'
+            : journeyState.hasMoved
+              ? 'SIGUE EL SENDERO DETRÁS DE LA MONTAÑA · CRUZA EL PUENTE SOBRE EL AGUA'
+              : 'USA WASD O LAS FLECHAS · SIGUE EL SENDERO HACIA LA CASITA Y LA MONTAÑA'}
+          {!journeyState.isNearPortal && !journeyState.isNearBridgeDestination && !journeyState.isNearCabin && !journeyState.isNearReader && !journeyState.isAtSummit && !journeyState.hasMoved && (
+            <span className="hidden sm:inline"> · SHIFT PARA CORRER</span>
+          )}
+        </span>
       </motion.p>
       {journeyState.isInsideCabin && (
         <button
           type="button"
-          onClick={() => setExitCabinRequested(true)}
+          onClick={() => {
+            setComputerState('idle');
+            setExitCabinRequested(true);
+          }}
           className="absolute right-4 top-1/2 z-20 -translate-y-1/2 rounded-full border border-amber-100/35 bg-[#101b20]/80 px-4 py-3 font-mono text-[9px] uppercase tracking-[0.12em] text-amber-50 shadow-lg backdrop-blur-xl transition hover:border-amber-100/65 hover:bg-[#17272a]/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-100 sm:right-7 sm:px-5 sm:text-[10px]"
         >
           Salir de la cabaña →
         </button>
       )}
-      {journeyState.isNearBridgeDestination && (
-        <motion.button
-          type="button"
-          onClick={enterCredentials}
+      {journeyState.isInsideCabin && computerState !== 'transitioning' && (
+        <motion.aside
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="absolute bottom-28 left-1/2 z-20 -translate-x-1/2 rounded-xl border border-cyan-100/35 bg-[#07121b]/85 px-5 py-3 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan-50 shadow-xl backdrop-blur-xl transition hover:border-cyan-100/70 hover:bg-[#10233a]/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:bottom-20"
+          className="absolute bottom-24 left-1/2 z-20 -translate-x-1/2 rounded-xl border border-cyan-100/35 bg-[#07121b]/85 px-4 py-3 text-center shadow-xl backdrop-blur-xl"
         >
-          Abrir Formación y certificaciones →
-        </motion.button>
+          <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-cyan-100/75">
+            {computerState === 'ready'
+              ? 'Sistema listo'
+              : computerState === 'seating'
+                ? 'Acercándose a la computadora…'
+                : 'Consola de la cabaña'}
+          </p>
+          <button
+            type="button"
+            disabled={computerState === 'seating'}
+            onClick={computerState === 'ready' ? initializeComputer : seatAtComputer}
+            className="mt-2 min-h-10 rounded-lg border border-cyan-100/40 px-4 font-mono text-[10px] uppercase tracking-[0.1em] text-cyan-50 transition hover:bg-cyan-100/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:cursor-wait disabled:opacity-60"
+          >
+            {computerState === 'ready' ? 'Ejecutar sistema' : 'Sentarse frente a la computadora'}
+          </button>
+        </motion.aside>
       )}
       <AnimatePresence>
         {cabinWelcomeOpen && (
@@ -4877,27 +5851,32 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
       <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-7">
         <section
           aria-label="Identidad de Gaby"
-          className="max-w-[min(62vw,22rem)] border border-white/15 bg-[#07121b]/65 px-3 py-2.5 font-mono shadow-lg backdrop-blur-xl sm:max-w-sm sm:px-4 sm:py-3"
+          className="relative isolate max-w-[min(62vw,22rem)] px-5 py-3.5 text-center font-mono sm:max-w-sm sm:px-6 sm:py-4"
         >
-          <p className="mb-1 text-[7px] uppercase tracking-[0.2em] text-amber-100/65 sm:text-[8px]">
-            {journeyState.isNearPortal
-              ? 'Umbral · gravedad inversa'
-              : journeyState.isNearBridgeDestination
-                ? 'Puente · destino formación'
-              : journeyState.isAtSummit
-                ? 'Cumbre · hora dorada'
-              : journeyState.isNearReader
-                ? 'Bosque · rincón de lectura'
+          <CloudShape
+            fill="rgba(83,151,190,0.26)"
+          />
+          <div className="relative z-10">
+            <p className="mb-1 text-[7px] uppercase tracking-[0.2em] text-amber-100/65 sm:text-[8px]">
+              {journeyState.isNearPortal
+                ? 'Umbral · gravedad inversa'
+                : journeyState.isNearBridgeDestination
+                  ? 'Puente sobre el agua'
+                : journeyState.isAtSummit
+                  ? 'Cumbre · hora dorada'
+                : journeyState.isNearReader
+                  ? 'Bosque · rincón de lectura'
                 : journeyState.isNearCabin
                   ? 'Refugio · la casita'
                   : ''}
-          </p>
-          <h1 className="text-[12px] tracking-[0.12em] text-white sm:text-base">
-            Gaby Edwin <span className="text-amber-100/70">_</span>
-          </h1>
-          <p className="mt-1 text-[8px] tracking-[0.06em] text-white/75 sm:text-[10px] sm:tracking-[0.1em]">
-            Creative Developer &amp; Arte Digital
-          </p>
+            </p>
+            <h1 className="text-[12px] tracking-[0.12em] text-white sm:text-base">
+              Gaby Edwin
+            </h1>
+            <p className="mt-1 text-[8px] tracking-[0.06em] text-white/75 sm:text-[10px] sm:tracking-[0.1em]">
+              Creative Developer &amp; Arte Digital
+            </p>
+          </div>
         </section>
         <motion.button
           type="button"
@@ -4907,10 +5886,13 @@ export default function RealWorldCollage({ onEnterGalaxy, onEnterCredentials }) 
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
-          className="min-h-11 shrink-0 border border-cyan-100/40 bg-[#07121b]/75 px-3 py-2 font-mono text-[9px] tracking-[0.08em] text-cyan-50 shadow-lg backdrop-blur-xl transition hover:border-cyan-100/75 hover:bg-[#10233a]/85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:px-4 sm:text-[10px]"
+          className="relative isolate flex min-h-11 shrink-0 items-center justify-center px-5 py-3 text-center font-mono text-[9px] tracking-[0.08em] text-cyan-50 transition hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:px-6 sm:text-[10px]"
         >
-          <span className="sm:hidden">Ver portafolio →</span>
-          <span className="hidden sm:inline">SALTAR RECORRIDO · VER PORTAFOLIO →</span>
+          <CloudShape
+            fill="rgba(83,151,190,0.3)"
+          />
+          <span className="relative z-10 sm:hidden">Ver portafolio →</span>
+          <span className="relative z-10 hidden sm:inline">SALTAR RECORRIDO · VER PORTAFOLIO →</span>
         </motion.button>
       </div>
     </motion.section>
